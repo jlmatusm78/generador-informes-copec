@@ -1,9 +1,20 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import datetime
+import io
+import zipfile
 
+import pandas as pd
 import streamlit as st
 
+from email_engine import (
+    SmtpSettings,
+    build_dispatch_table,
+    load_recipient_catalog,
+    prepare_email,
+    read_pdf_attachments,
+    send_batch,
+)
 from report_engine import ReportConfig, detect_default_week, generate_reports, load_data
 
 st.set_page_config(
@@ -13,11 +24,22 @@ st.set_page_config(
 )
 
 st.title("Generador Automático de Informes - Torre de Control COPEC")
-st.caption("Carga el registro Guardian/FlotaGo y genera informes semanales en PDF, sin IRO.")
+st.caption("Genera informes semanales en PDF y envíalos a cada transportista por correo, sin IRO.")
+
+for key, default in {
+    "global_pdf": None,
+    "zip_bytes": None,
+    "generation_summary": None,
+    "dispatch_table": None,
+    "send_log": [],
+    "sent_keys": set(),
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
 
 with st.sidebar:
     st.header("Configuración")
-    uploaded = st.file_uploader("Archivo Excel", type=["xlsx", "xls"])
+    uploaded = st.file_uploader("Archivo Excel de alertas", type=["xlsx", "xls"], key="alerts_file")
     comparison_weeks = st.selectbox("Semanas a comparar", [3, 4, 5, 6], index=1)
     include_global = st.checkbox("Informe Global COPEC", value=True)
     include_transportistas = st.checkbox("Informes por transportista", value=True)
@@ -51,7 +73,6 @@ if (week_end - week_start).days > 14:
     st.warning("El rango seleccionado supera 14 días. El formato está optimizado para informes semanales.")
 
 current = data[(data["Fecha"].dt.date >= week_start) & (data["Fecha"].dt.date <= week_end)]
-
 m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("Alertas", f"{len(current):,}")
 m2.metric("Transportistas", current["Transportista"].nunique())
@@ -59,48 +80,227 @@ m3.metric("Conductores", current["Conductor"].nunique())
 m4.metric("Equipos", current["Tracto"].nunique())
 m5.metric("Fatiga", int((current["Tipo"] == "Fatiga").sum()))
 
-st.subheader("Contenido de los informes")
-st.write(
-    "Evolución semanal, tendencias por tipo de alerta, semáforo ejecutivo, empresas y conductores críticos, "
-    "fatiga, cumplimiento del protocolo, reincidencia, matriz empresa/tipo de alerta y plan de acción."
-)
+reports_tab, email_tab = st.tabs(["📄 Generación de informes", "✉️ Envío por correo"])
 
-if st.button("Generar informes", type="primary", use_container_width=True):
-    config = ReportConfig(
-        week_start=week_start,
-        week_end=week_end,
-        comparison_weeks=comparison_weeks,
-        include_global=include_global,
-        include_transportistas=include_transportistas,
+with reports_tab:
+    st.subheader("Contenido de los informes")
+    st.write(
+        "Evolución semanal, tendencias por tipo de alerta, semáforo ejecutivo, empresas y conductores críticos, "
+        "fatiga, cumplimiento del protocolo, reincidencia, matriz empresa/tipo de alerta y plan de acción."
     )
-    try:
-        with st.spinner("Analizando datos y generando informes PDF..."):
-            global_pdf, zip_bytes, summary = generate_reports(data, config)
-    except Exception as exc:
-        st.exception(exc)
+
+    if st.button("Generar informes", type="primary", use_container_width=True):
+        config = ReportConfig(
+            week_start=week_start,
+            week_end=week_end,
+            comparison_weeks=comparison_weeks,
+            include_global=include_global,
+            include_transportistas=include_transportistas,
+        )
+        try:
+            with st.spinner("Analizando datos y generando informes PDF..."):
+                global_pdf, zip_bytes, summary = generate_reports(data, config)
+        except Exception as exc:
+            st.exception(exc)
+            st.stop()
+
+        st.session_state.global_pdf = global_pdf
+        st.session_state.zip_bytes = zip_bytes
+        st.session_state.generation_summary = summary
+        st.session_state.dispatch_table = None
+        st.session_state.send_log = []
+        st.session_state.sent_keys = set()
+        st.success("Informes generados correctamente.")
+
+    if st.session_state.generation_summary:
+        summary = st.session_state.generation_summary
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Alertas", summary["total_alertas"])
+        c2.metric("Transportistas", summary["transportistas"])
+        c3.metric("Conductores", summary["conductores"])
+        c4.metric("Equipos", summary["equipos"])
+        c5.metric("Fatiga", summary["fatiga"])
+
+        if st.session_state.global_pdf:
+            st.download_button(
+                "Descargar Informe Global COPEC",
+                data=st.session_state.global_pdf,
+                file_name=f"Informe_Global_COPEC_{week_start:%d%m}_{week_end:%d%m%Y}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        if st.session_state.zip_bytes:
+            st.download_button(
+                "Descargar ZIP completo",
+                data=st.session_state.zip_bytes,
+                file_name=f"Informes_COPEC_{week_start:%d%m}_{week_end:%d%m%Y}.zip",
+                mime="application/zip",
+                use_container_width=True,
+            )
+
+with email_tab:
+    st.subheader("Envío automático de informes")
+    st.info(
+        "Primero genera los informes. Luego carga la tabla de destinatarios, revisa la vista previa y envía una prueba antes del envío masivo."
+    )
+
+    if not st.session_state.zip_bytes:
+        st.warning("Todavía no hay informes generados en esta sesión.")
         st.stop()
 
-    st.success("Informes generados correctamente.")
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Alertas", summary["total_alertas"])
-    c2.metric("Transportistas", summary["transportistas"])
-    c3.metric("Conductores", summary["conductores"])
-    c4.metric("Equipos", summary["equipos"])
-    c5.metric("Fatiga", summary["fatiga"])
+    recipients_file = st.file_uploader(
+        "Tabla de destinatarios (Excel o CSV)",
+        type=["xlsx", "xls", "csv"],
+        help="Columnas: Transportista, Para, CC y Activo. Usa COPEC como transportista para el informe global.",
+        key="recipients_file",
+    )
 
-    if global_pdf:
-        st.download_button(
-            "Descargar Informe Global COPEC",
-            data=global_pdf,
-            file_name=f"Informe_Global_COPEC_{week_start:%d%m}_{week_end:%d%m%Y}.pdf",
-            mime="application/pdf",
-            use_container_width=True,
+    try:
+        catalog = load_recipient_catalog(recipients_file) if recipients_file else pd.DataFrame(columns=["Transportista", "Para", "CC", "Activo"])
+    except Exception as exc:
+        st.error(f"No fue posible leer la tabla de destinatarios: {exc}")
+        catalog = pd.DataFrame(columns=["Transportista", "Para", "CC", "Activo"])
+
+    attachments = read_pdf_attachments(st.session_state.zip_bytes)
+    if st.session_state.dispatch_table is None or recipients_file is not None:
+        st.session_state.dispatch_table = build_dispatch_table(attachments, catalog)
+
+    st.caption("Puedes corregir destinatarios directamente en la tabla antes de enviar.")
+    edited = st.data_editor(
+        st.session_state.dispatch_table,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Enviar": st.column_config.CheckboxColumn("Enviar"),
+            "Transportista": st.column_config.TextColumn("Transportista", disabled=True),
+            "Para": st.column_config.TextColumn("Para"),
+            "CC": st.column_config.TextColumn("CC"),
+            "Informe": st.column_config.TextColumn("Informe", disabled=True),
+            "Estado": st.column_config.TextColumn("Estado", disabled=True),
+        },
+        key="dispatch_editor",
+    )
+    edited["Estado"] = edited["Para"].apply(lambda x: "Listo" if str(x).strip() else "Falta destinatario")
+    st.session_state.dispatch_table = edited
+
+    selected = edited[edited["Enviar"]].copy()
+    missing = selected[selected["Para"].astype(str).str.strip() == ""]
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Informes disponibles", len(attachments))
+    c2.metric("Seleccionados", len(selected))
+    c3.metric("Sin destinatario", len(missing))
+
+    if len(selected):
+        preview_name = st.selectbox("Vista previa", selected["Transportista"].tolist())
+        preview_row = selected[selected["Transportista"] == preview_name].iloc[0]
+        st.markdown(f"**Para:** {preview_row['Para'] or 'Sin destinatario'}")
+        st.markdown(f"**CC:** {preview_row['CC'] or 'Sin copia'}")
+        st.markdown(f"**Adjunto:** {preview_row['Informe']}")
+        st.markdown(
+            f"**Asunto:** Informe semanal de alertas | {preview_name} | "
+            f"{week_start:%d-%m-%Y} al {week_end:%d-%m-%Y}"
         )
-    if zip_bytes:
+
+    st.divider()
+    st.subheader("Configuración de Gmail / Google Workspace")
+    try:
+        gmail_secrets = st.secrets.get("gmail", {})
+    except Exception:
+        gmail_secrets = {}
+
+    configured_sender = str(gmail_secrets.get("sender_email", ""))
+    if configured_sender:
+        st.success(f"Cuenta configurada: {configured_sender}")
+    else:
+        st.warning("Falta configurar la sección [gmail] en Streamlit Secrets. Consulta el README incluido.")
+
+    test_recipient = st.text_input("Correo para envío de prueba", placeholder="tu-correo@empresa.cl")
+    confirm = st.checkbox("He revisado los destinatarios, los adjuntos y el período de los informes.")
+
+    attachment_lookup = {item["filename"]: item for item in attachments}
+
+    def smtp_settings_from_secrets() -> SmtpSettings:
+        if not gmail_secrets:
+            raise ValueError("No se encontró la configuración [gmail] en Streamlit Secrets.")
+        required = ["username", "password", "sender_email"]
+        missing_keys = [k for k in required if not str(gmail_secrets.get(k, "")).strip()]
+        if missing_keys:
+            raise ValueError("Faltan secretos Gmail: " + ", ".join(missing_keys))
+        return SmtpSettings(
+            host=str(gmail_secrets.get("host", "smtp.gmail.com")),
+            port=int(gmail_secrets.get("port", 587)),
+            username=str(gmail_secrets["username"]),
+            password=str(gmail_secrets["password"]),
+            sender_email=str(gmail_secrets["sender_email"]),
+            sender_name=str(gmail_secrets.get("sender_name", "Torre de Control COPEC")),
+            use_tls=bool(gmail_secrets.get("use_tls", True)),
+            use_ssl=bool(gmail_secrets.get("use_ssl", False)),
+        )
+
+    b1, b2 = st.columns(2)
+    with b1:
+        if st.button("Enviar correo de prueba", use_container_width=True, disabled=not (confirm and test_recipient and len(selected))):
+            try:
+                settings = smtp_settings_from_secrets()
+                row = selected.iloc[0].to_dict()
+                attachment = attachment_lookup[row["Informe"]]
+                email = prepare_email(
+                    row,
+                    attachment,
+                    week_start.strftime("%d-%m-%Y"),
+                    week_end.strftime("%d-%m-%Y"),
+                    test_recipient=test_recipient,
+                )
+                results = send_batch(settings, [email])
+                st.session_state.send_log.extend(results)
+                if results[0]["Resultado"] == "Enviado":
+                    st.success("Correo de prueba enviado correctamente.")
+                else:
+                    st.error(results[0]["Detalle"])
+            except Exception as exc:
+                st.error(str(exc))
+
+    with b2:
+        if st.button("Enviar informes seleccionados", type="primary", use_container_width=True, disabled=not (confirm and len(selected) and not len(missing))):
+            try:
+                settings = smtp_settings_from_secrets()
+                prepared = []
+                skipped = 0
+                for row in selected.to_dict("records"):
+                    key = f"{week_start}|{week_end}|{row['Informe']}|{row['Para']}"
+                    if key in st.session_state.sent_keys:
+                        skipped += 1
+                        continue
+                    prepared.append(prepare_email(
+                        row,
+                        attachment_lookup[row["Informe"]],
+                        week_start.strftime("%d-%m-%Y"),
+                        week_end.strftime("%d-%m-%Y"),
+                    ))
+                if not prepared:
+                    st.warning("Todos los informes seleccionados ya fueron enviados durante esta sesión.")
+                else:
+                    with st.spinner(f"Enviando {len(prepared)} correos..."):
+                        results = send_batch(settings, prepared)
+                    st.session_state.send_log.extend(results)
+                    for result, email in zip(results, prepared):
+                        if result["Resultado"] == "Enviado":
+                            key = f"{week_start}|{week_end}|{email.attachment_name}|{';'.join(email.to)}"
+                            st.session_state.sent_keys.add(key)
+                    ok = sum(r["Resultado"] == "Enviado" for r in results)
+                    errors = len(results) - ok
+                    st.success(f"Enviados: {ok}. Errores: {errors}. Omitidos por duplicado: {skipped}.")
+            except Exception as exc:
+                st.error(str(exc))
+
+    if st.session_state.send_log:
+        st.subheader("Registro de envíos")
+        log_df = pd.DataFrame(st.session_state.send_log)
+        st.dataframe(log_df, use_container_width=True, hide_index=True)
         st.download_button(
-            "Descargar ZIP completo",
-            data=zip_bytes,
-            file_name=f"Informes_COPEC_{week_start:%d%m}_{week_end:%d%m%Y}.zip",
-            mime="application/zip",
+            "Descargar registro CSV",
+            data=log_df.to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"Registro_envios_{datetime.now():%Y%m%d_%H%M}.csv",
+            mime="text/csv",
             use_container_width=True,
         )

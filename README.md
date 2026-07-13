@@ -1,6 +1,6 @@
-# Generador Automático de Informes COPEC
+# Generador Automático de Informes COPEC con envío por correo
 
-Aplicación Streamlit para generar informes semanales a partir de un Excel con hojas `GUARDIAN` y/o `FLOTAGO`.
+Aplicación Streamlit para generar informes semanales desde un Excel con hojas `GUARDIAN` y/o `FLOTAGO`, y enviarlos automáticamente a cada transportista.
 
 ## Funciones
 
@@ -8,39 +8,82 @@ Aplicación Streamlit para generar informes semanales a partir de un Excel con h
 - Informe individual por cada transportista con alertas.
 - ZIP automático con todos los informes.
 - Evolución semanal y por tipo de alerta.
-- Semáforo ejecutivo.
-- Rankings de empresas y conductores.
-- Fatiga y cumplimiento del descanso mínimo.
-- Indicador de reincidencia, sin IRO.
-- Matriz empresa vs tipo de alerta.
+- Semáforo ejecutivo, reincidencia y gestión de fatiga.
+- Envío por Gmail o Google Workspace mediante SMTP seguro.
+- Tabla editable de destinatarios.
+- Vista previa de cada correo.
+- Envío de prueba antes del envío masivo.
+- Selección de informes a enviar.
+- Protección contra envíos duplicados dentro de la sesión.
+- Registro descargable en CSV.
 
 ## Ejecutar localmente
-
-1. Instalar Python 3.11 o superior.
-2. Abrir una terminal en esta carpeta.
-3. Ejecutar:
 
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-4. Abrir la dirección que muestra Streamlit, normalmente `http://localhost:8501`.
+## Configurar Gmail en Streamlit Community Cloud
 
-## Streamlit Community Cloud
+En la aplicación desplegada abre:
 
-Sube esta carpeta a un repositorio de GitHub y selecciona `app.py` como archivo principal al crear la aplicación.
+`Manage app > Settings > Secrets`
 
-## Formato esperado
+Pega lo siguiente, reemplazando los datos:
 
-El Excel debe contener al menos una hoja llamada `GUARDIAN` o `FLOTAGO`. Las columnas principales utilizadas son:
+```toml
+[gmail]
+host = "smtp.gmail.com"
+port = 587
+username = "correo@tuempresa.cl"
+password = "CONTRASENA_DE_APLICACION"
+sender_email = "correo@tuempresa.cl"
+sender_name = "Torre de Control COPEC"
+use_tls = true
+use_ssl = false
+```
 
-- ID
-- Fecha
-- Transportista
-- Conductor
-- Tracto
-- Incidente
-- Conductor se detine mínimo 15 minutos
+### Contraseña de aplicación
 
-La aplicación tolera columnas faltantes no críticas y normaliza automáticamente los tipos de alerta.
+Para una cuenta Gmail o Google Workspace:
+
+1. Activa la verificación en dos pasos en la cuenta remitente.
+2. Crea una contraseña de aplicación para correo.
+3. Usa esa contraseña en `password`; no uses la contraseña normal de la cuenta.
+4. No subas `secrets.toml` a GitHub. El proyecto incluye `.gitignore` para evitarlo.
+
+Si la organización bloquea contraseñas de aplicación, el administrador de Google Workspace deberá habilitarlas o proporcionar un relay SMTP autorizado.
+
+## Tabla de destinatarios
+
+Carga un Excel o CSV con estas columnas:
+
+| Transportista | Para | CC | Activo |
+|---|---|---|---|
+| COPEC | gerencia@empresa.cl | operaciones@empresa.cl | SI |
+| TRANSPORTES ACUBAR LIMITADA | prevencion@acubar.cl | supervisor@empresa.cl | SI |
+
+- Usa `COPEC` para el destinatario del informe global.
+- Puedes ingresar varios correos separados por punto y coma.
+- `Activo = NO` deja el informe desmarcado inicialmente.
+- La tabla puede corregirse directamente desde la aplicación antes del envío.
+
+## Flujo recomendado
+
+1. Subir el registro Guardian/FlotaGo.
+2. Seleccionar la semana.
+3. Generar informes.
+4. Abrir la pestaña **Envío por correo**.
+5. Cargar la tabla de destinatarios.
+6. Revisar la vista previa.
+7. Enviar un correo de prueba.
+8. Marcar la confirmación.
+9. Enviar los informes seleccionados.
+10. Descargar el registro de envíos.
+
+## Seguridad
+
+- Los registros operacionales se cargan temporalmente en la sesión de Streamlit.
+- Las credenciales se guardan en Streamlit Secrets, no en GitHub.
+- La aplicación no almacena permanentemente las contraseñas ni los Excel cargados.
