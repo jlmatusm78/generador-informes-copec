@@ -15,7 +15,28 @@ from email_engine import (
     read_pdf_attachments,
     send_batch,
 )
-from report_engine import ReportConfig, detect_default_month, detect_default_week, generate_reports, load_data
+try:
+    from report_engine import (
+        REPORT_ENGINE_VERSION,
+        ReportConfig,
+        detect_default_month,
+        detect_default_week,
+        generate_reports,
+        load_data,
+    )
+except ImportError as exc:
+    raise ImportError(
+        "No se pudo cargar la versión correcta de report_engine.py. "
+        "Reemplaza en GitHub app.py y report_engine.py por los archivos del mismo paquete, "
+        "elimina cualquier carpeta __pycache__ y reinicia la aplicación en Streamlit Cloud."
+    ) from exc
+
+EXPECTED_REPORT_ENGINE_VERSION = "2026.08.01.2"
+if REPORT_ENGINE_VERSION != EXPECTED_REPORT_ENGINE_VERSION:
+    raise ImportError(
+        f"Versiones incompatibles: app.py requiere report_engine {EXPECTED_REPORT_ENGINE_VERSION}, "
+        f"pero se cargó {REPORT_ENGINE_VERSION}. Reemplaza ambos archivos juntos."
+    )
 
 st.set_page_config(
     page_title="Generador de Informes COPEC",

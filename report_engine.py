@@ -27,6 +27,7 @@ ALERT_WEIGHTS = {
     "Conductor fumando": 2, "Sin conductor": 2, "Cámara desalineada": 1, "Bostezo": 1,
 }
 GENERIC_TRANSPORTISTAS = ["COPEC", "NO ES COPEC", "PLANTA", "DESCONOCIDO", "OWL", "GPS", "PRUEBA", "SIN TRANSPORTISTA"]
+REPORT_ENGINE_VERSION = "2026.08.01.2"
 
 
 @dataclass
