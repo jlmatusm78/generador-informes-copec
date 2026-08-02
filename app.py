@@ -31,7 +31,7 @@ except ImportError as exc:
         "elimina cualquier carpeta __pycache__ y reinicia la aplicación en Streamlit Cloud."
     ) from exc
 
-EXPECTED_REPORT_ENGINE_VERSION = "2026.08.01.2"
+EXPECTED_REPORT_ENGINE_VERSION = "2026.08.01.3"
 if REPORT_ENGINE_VERSION != EXPECTED_REPORT_ENGINE_VERSION:
     raise ImportError(
         f"Versiones incompatibles: app.py requiere report_engine {EXPECTED_REPORT_ENGINE_VERSION}, "
@@ -85,8 +85,15 @@ st.success(f"Archivo leído correctamente: {len(data):,} registros, desde {min_d
 
 if report_mode == "Mensual":
     available_months = sorted(data["Fecha"].dt.to_period("M").unique(), reverse=True)
-    selected_month = st.selectbox("Mes del informe", available_months, format_func=lambda p: p.strftime("%B %Y"))
-    period_start, period_end = selected_month.start_time.date(), selected_month.end_time.date()
+    selected_month = st.selectbox(
+        "Mes del informe",
+        available_months,
+        format_func=lambda p: p.strftime("%B %Y"),
+        key="selected_report_month",
+    )
+    period_start = selected_month.start_time.date()
+    period_end = selected_month.end_time.date()
+    st.caption(f"El informe incluirá exclusivamente datos entre {period_start:%d-%m-%Y} y {period_end:%d-%m-%Y}.")
 else:
     col1, col2 = st.columns(2)
     with col1:

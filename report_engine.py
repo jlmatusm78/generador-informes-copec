@@ -27,7 +27,7 @@ ALERT_WEIGHTS = {
     "Conductor fumando": 2, "Sin conductor": 2, "Cámara desalineada": 1, "Bostezo": 1,
 }
 GENERIC_TRANSPORTISTAS = ["COPEC", "NO ES COPEC", "PLANTA", "DESCONOCIDO", "OWL", "GPS", "PRUEBA", "SIN TRANSPORTISTA"]
-REPORT_ENGINE_VERSION = "2026.08.01.2"
+REPORT_ENGINE_VERSION = "2026.08.01.3"
 
 
 @dataclass
@@ -332,7 +332,15 @@ def generate_transportista_report(data, transportista, config, output_dir, index
 
 
 def generate_reports(data, config):
-    data=filter_real_transportistas(data); current=_period_slice(data,config.period_start,config.period_end)
+    data = filter_real_transportistas(data)
+
+    # Corte de seguridad: ningún dato posterior al período seleccionado puede
+    # participar en los informes, rankings, categorías ni gráficos de tendencia.
+    # Esto evita que registros de agosto aparezcan al generar julio.
+    cutoff = pd.Timestamp(datetime.combine(config.period_end, datetime.max.time()))
+    data = data[data["Fecha"] <= cutoff].copy()
+
+    current = _period_slice(data, config.period_start, config.period_end)
     if current.empty: raise ValueError("No existen alertas dentro del período seleccionado.")
     with tempfile.TemporaryDirectory(prefix="copec_reports_") as tmp:
         out=Path(tmp); global_bytes=None; report_paths=[]; global_path=None
