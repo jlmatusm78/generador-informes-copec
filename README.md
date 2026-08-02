@@ -87,3 +87,18 @@ Carga un Excel o CSV con estas columnas:
 - Los registros operacionales se cargan temporalmente en la sesión de Streamlit.
 - Las credenciales se guardan en Streamlit Secrets, no en GitHub.
 - La aplicación no almacena permanentemente las contraseñas ni los Excel cargados.
+
+## Informes semanales y mensuales
+
+La aplicación permite seleccionar **Semanal** o **Mensual** antes de generar los informes.
+
+- Informe Global COPEC: 4 páginas ejecutivas.
+- Informe por transportista: 3 páginas.
+- Tendencias configurables de 3, 4, 6 o 12 períodos.
+- Ranking ponderado de conductores por severidad.
+- Comparación con el período anterior.
+- Tendencias por tipo de alerta.
+- Indicadores de fatiga, reincidencia y concentración del riesgo.
+- Correos y nombres de archivos adaptados al modo semanal o mensual.
+
+El puntaje de criticidad pondera Fatiga (5), Uso celular (4), Sin cinturón y Tapado de cámara (3), Fumar y Sin conductor (2), Cámara desalineada y Bostezo (1).

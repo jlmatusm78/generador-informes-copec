@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import os
 import re
 import tempfile
 import textwrap
@@ -21,52 +20,44 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
-from reportlab.platypus import (
-    Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle,
-)
+from reportlab.platypus import Image, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 ALERT_WEIGHTS = {
-    "Fatiga": 5,
-    "Uso celular": 4,
-    "Sin cinturón": 3,
-    "Tapado cámara": 3,
-    "Conductor fumando": 2,
-    "Sin conductor": 2,
-    "Cámara desalineada": 1,
-    "Bostezo": 1,
+    "Fatiga": 5, "Uso celular": 4, "Sin cinturón": 3, "Tapado cámara": 3,
+    "Conductor fumando": 2, "Sin conductor": 2, "Cámara desalineada": 1, "Bostezo": 1,
 }
+GENERIC_TRANSPORTISTAS = ["COPEC", "NO ES COPEC", "PLANTA", "DESCONOCIDO", "OWL", "GPS", "PRUEBA", "SIN TRANSPORTISTA"]
 
-GENERIC_TRANSPORTISTAS = [
-    "COPEC", "NO ES COPEC", "PLANTA", "DESCONOCIDO", "OWL", "GPS",
-    "PRUEBA", "SIN TRANSPORTISTA",
-]
 
 @dataclass
 class ReportConfig:
-    week_start: date
-    week_end: date
-    comparison_weeks: int = 4
+    period_start: date
+    period_end: date
+    report_mode: str = "Semanal"
+    comparison_periods: int = 4
     include_global: bool = True
     include_transportistas: bool = True
+    top_drivers: int = 12
+
+    @property
+    def week_start(self):
+        return self.period_start
+
+    @property
+    def week_end(self):
+        return self.period_end
 
 
 def norm_text(value: object) -> str:
     text = str(value).upper().strip()
-    text = "".join(
-        c for c in unicodedata.normalize("NFD", text)
-        if unicodedata.category(c) != "Mn"
-    )
+    text = "".join(c for c in unicodedata.normalize("NFD", text) if unicodedata.category(c) != "Mn")
     return re.sub(r"\s+", " ", text)
 
 
 def safe_filename(value: object, max_len: int = 90) -> str:
-    text = "".join(
-        c for c in unicodedata.normalize("NFD", str(value))
-        if unicodedata.category(c) != "Mn"
-    )
+    text = "".join(c for c in unicodedata.normalize("NFD", str(value)) if unicodedata.category(c) != "Mn")
     text = re.sub(r"[^\w\s\-.&]", "", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return (text[:max_len] or "SIN_NOMBRE").strip()
+    return (re.sub(r"\s+", " ", text).strip()[:max_len] or "SIN_NOMBRE")
 
 
 def truncate(value: object, length: int) -> str:
@@ -80,29 +71,21 @@ def wrap_label(value: object, width: int = 20) -> str:
 
 def normalize_alert(value: object) -> str:
     s = str(value).lower()
-    if any(x in s for x in ["cansancio", "fatiga", "somnolencia"]):
-        return "Fatiga"
-    if any(x in s for x in ["celular", "telefono", "teléfono"]):
-        return "Uso celular"
-    if "cintur" in s:
-        return "Sin cinturón"
-    if "desalinead" in s:
-        return "Cámara desalineada"
-    if "tapad" in s:
-        return "Tapado cámara"
-    if "bostezo" in s:
-        return "Bostezo"
-    if "fumando" in s:
-        return "Conductor fumando"
-    if "sin conductor" in s:
-        return "Sin conductor"
+    if any(x in s for x in ["cansancio", "fatiga", "somnolencia"]): return "Fatiga"
+    if any(x in s for x in ["celular", "telefono", "teléfono"]): return "Uso celular"
+    if "cintur" in s: return "Sin cinturón"
+    if "desalinead" in s: return "Cámara desalineada"
+    if "tapad" in s: return "Tapado cámara"
+    if "bostezo" in s: return "Bostezo"
+    if "fumando" in s: return "Conductor fumando"
+    if "sin conductor" in s: return "Sin conductor"
     return str(value).strip()[:55] or "Sin clasificar"
 
 
 def load_data(uploaded_file) -> pd.DataFrame:
     raw = uploaded_file.getvalue() if hasattr(uploaded_file, "getvalue") else Path(uploaded_file).read_bytes()
     excel = pd.ExcelFile(io.BytesIO(raw))
-    frames: list[pd.DataFrame] = []
+    frames = []
     for sheet in excel.sheet_names:
         name = sheet.strip().upper()
         if name in {"GUARDIAN", "FLOTAGO"}:
@@ -111,16 +94,10 @@ def load_data(uploaded_file) -> pd.DataFrame:
             frames.append(df)
     if not frames:
         raise ValueError("El archivo debe contener hojas llamadas GUARDIAN y/o FLOTAGO.")
-
     data = pd.concat(frames, ignore_index=True)
-    required = [
-        "ID", "Fecha", "Transportista", "Conductor", "Tracto", "Incidente",
-        "Plataforma", "Conductor se detine mínimo 15 minutos",
-    ]
+    required = ["ID", "Fecha", "Transportista", "Conductor", "Tracto", "Incidente", "Plataforma", "Conductor se detine mínimo 15 minutos"]
     for col in required:
-        if col not in data.columns:
-            data[col] = np.nan
-
+        if col not in data.columns: data[col] = np.nan
     data["Fecha"] = pd.to_datetime(data["Fecha"], errors="coerce")
     data = data.dropna(subset=["Fecha"]).copy()
     data["Transportista"] = data["Transportista"].fillna("SIN TRANSPORTISTA").astype(str).str.strip()
@@ -130,449 +107,241 @@ def load_data(uploaded_file) -> pd.DataFrame:
     data["Plataforma"] = data["Plataforma"].fillna("SIN PLATAFORMA").astype(str).str.upper().str.strip()
     data["Tipo"] = data["Incidente"].apply(normalize_alert)
     data["FechaDia"] = data["Fecha"].dt.date
+    data["Mes"] = data["Fecha"].dt.to_period("M")
+    data["Puntaje"] = data["Tipo"].map(ALERT_WEIGHTS).fillna(1).astype(int)
     return data.sort_values("Fecha").reset_index(drop=True)
 
 
 def filter_real_transportistas(data: pd.DataFrame) -> pd.DataFrame:
-    mask = data["Transportista"].map(
-        lambda x: not any(g in norm_text(x) for g in GENERIC_TRANSPORTISTAS)
-    )
-    return data[mask].copy()
+    return data[data["Transportista"].map(lambda x: not any(g in norm_text(x) for g in GENERIC_TRANSPORTISTAS))].copy()
 
 
 def detect_default_week(data: pd.DataFrame) -> tuple[date, date]:
     max_date = data["Fecha"].max().date()
-    # Last complete Monday-Sunday week ending on or before max_date.
     end = max_date - timedelta(days=(max_date.weekday() + 1) % 7)
-    start = end - timedelta(days=6)
-    return start, end
+    return end - timedelta(days=6), end
 
 
-def comparison_ranges(start: date, count: int) -> list[tuple[str, pd.Timestamp, pd.Timestamp]]:
+def detect_default_month(data: pd.DataFrame) -> tuple[date, date]:
+    max_date = data["Fecha"].max()
+    p = max_date.to_period("M")
+    return p.start_time.date(), p.end_time.date()
+
+
+def _period_slice(data: pd.DataFrame, start: date, end: date) -> pd.DataFrame:
+    return data[(data["Fecha"] >= pd.Timestamp(start)) & (data["Fecha"] <= pd.Timestamp(datetime.combine(end, datetime.max.time())))].copy()
+
+
+def comparison_ranges(config: ReportConfig):
     ranges = []
-    first = start - timedelta(days=7 * (count - 1))
-    for i in range(count):
-        s = first + timedelta(days=7 * i)
-        e = s + timedelta(days=6)
-        label = f"{s.strftime('%d-%m')} / {e.strftime('%d-%m')}"
-        ranges.append((label, pd.Timestamp(s), pd.Timestamp(datetime.combine(e, datetime.max.time()))))
+    if config.report_mode.lower().startswith("mens"):
+        current = pd.Period(config.period_start, freq="M")
+        for p in pd.period_range(current - (config.comparison_periods - 1), current, freq="M"):
+            ranges.append((p.strftime("%b-%Y"), p.start_time, p.end_time))
+    else:
+        first = config.period_start - timedelta(days=7 * (config.comparison_periods - 1))
+        for i in range(config.comparison_periods):
+            s = first + timedelta(days=7 * i); e = s + timedelta(days=6)
+            ranges.append((f"{s:%d-%m} / {e:%d-%m}", pd.Timestamp(s), pd.Timestamp(datetime.combine(e, datetime.max.time()))))
     return ranges
 
 
+def pct_value(current: float, previous: float) -> float:
+    if previous == 0: return 100.0 if current > 0 else 0.0
+    return (current - previous) / previous * 100
+
+
 def pct_change(current: float, previous: float) -> str:
-    if previous == 0 and current == 0:
-        return "0%"
-    if previous == 0:
-        return "+100%"
-    return f"{((current - previous) / previous) * 100:+.1f}%"
+    return f"{pct_value(current, previous):+.1f}%"
 
 
-def compliance_summary(df: pd.DataFrame) -> tuple[int, int, int, int, float]:
+def trend_symbol(current: float, previous: float) -> str:
+    return "↑" if current > previous else ("↓" if current < previous else "↔")
+
+
+def risk_level(score: float, alerts: int, fatigue: int) -> str:
+    if fatigue >= 3 or score >= 25 or alerts >= 12: return "CRÍTICO"
+    if fatigue >= 1 or score >= 12 or alerts >= 6: return "ALTO"
+    if score >= 6 or alerts >= 3: return "MEDIO"
+    return "BAJO"
+
+
+def compliance_summary(df: pd.DataFrame):
     fatigue = df[df["Tipo"].eq("Fatiga")]
     total = len(fatigue)
-    if total == 0:
-        return 0, 0, 0, 0, 0.0
-    values = (
-        fatigue["Conductor se detine mínimo 15 minutos"]
-        .fillna("PENDIENTE").astype(str).str.upper().str.strip()
-    )
-    yes = int((values == "SI").sum())
-    no = int((values == "NO").sum())
-    pending = total - yes - no
-    return total, yes, no, pending, yes / total * 100
+    if not total: return 0, 0, 0, 0, 0.0
+    v = fatigue["Conductor se detine mínimo 15 minutos"].fillna("PENDIENTE").astype(str).str.upper().str.strip()
+    yes, no = int((v == "SI").sum()), int((v == "NO").sum())
+    return total, yes, no, total - yes - no, yes / total * 100
 
 
-def driver_ranking(df: pd.DataFrame, topn: int = 10, include_transportista: bool = False) -> pd.DataFrame:
-    if df.empty:
-        columns = ["Conductor", "Alertas", "Dias", "Fatiga", "Celular", "Tendencia"]
-        if include_transportista:
-            columns.insert(1, "Transportista")
-        return pd.DataFrame(columns=columns)
+def recurrence_summary(df: pd.DataFrame):
+    counts = df.groupby("Conductor").size() if not df.empty else pd.Series(dtype=int)
+    total = len(counts); three = int((counts >= 3).sum())
+    return {"one": int((counts == 1).sum()), "two": int((counts == 2).sum()), "three_plus": three, "total": total, "rate": three / total * 100 if total else 0.0}
+
+
+def detailed_driver_ranking(current: pd.DataFrame, previous: pd.DataFrame, topn=12, include_transportista=False):
     group = ["Conductor", "Transportista"] if include_transportista else ["Conductor"]
-    base = df.groupby(group).agg(
-        Alertas=("ID", "count"),
-        Dias=("FechaDia", "nunique"),
+    cols = group + ["Alertas", "Puntaje", "Fatiga", "Celular", "Cámaras", "Anterior", "Variación", "Tendencia", "Nivel"]
+    if current.empty: return pd.DataFrame(columns=cols)
+    rank = current.groupby(group).agg(
+        Alertas=("ID", "count"), Puntaje=("Puntaje", "sum"),
         Fatiga=("Tipo", lambda s: int((s == "Fatiga").sum())),
         Celular=("Tipo", lambda s: int((s == "Uso celular").sum())),
+        Cámaras=("Tipo", lambda s: int(s.isin(["Tapado cámara", "Cámara desalineada"]).sum())),
+        Dias=("FechaDia", "nunique"),
     ).reset_index()
-    return base.sort_values(["Alertas", "Fatiga", "Celular", "Dias"], ascending=False).head(topn)
-
-
-def recurrence_summary(df: pd.DataFrame) -> dict[str, float]:
-    counts = df.groupby("Conductor").size() if not df.empty else pd.Series(dtype=int)
-    one = int((counts == 1).sum())
-    two = int((counts == 2).sum())
-    three_plus = int((counts >= 3).sum())
-    total = int(len(counts))
-    rate = (three_plus / total * 100) if total else 0.0
-    return {"one": one, "two": two, "three_plus": three_plus, "total": total, "rate": rate}
+    prev = previous.groupby("Conductor").size()
+    rank["Anterior"] = rank["Conductor"].map(prev).fillna(0).astype(int)
+    rank["Variación"] = [pct_change(a, b) for a, b in zip(rank["Alertas"], rank["Anterior"])]
+    rank["Tendencia"] = [trend_symbol(a, b) for a, b in zip(rank["Alertas"], rank["Anterior"])]
+    rank["Nivel"] = [risk_level(s, a, f) for s, a, f in zip(rank["Puntaje"], rank["Alertas"], rank["Fatiga"])]
+    return rank.sort_values(["Puntaje", "Fatiga", "Alertas"], ascending=False).head(topn)
 
 
 def _styles():
-    styles = getSampleStyleSheet()
-    styles.add(ParagraphStyle(name="BodyCustom", parent=styles["BodyText"], fontSize=8.2, leading=10.8))
-    styles.add(ParagraphStyle(name="SmallCustom", parent=styles["BodyText"], fontSize=6.2, leading=7.7))
-    styles.add(ParagraphStyle(name="TitleCustom", parent=styles["Title"], fontSize=17, leading=20, textColor=colors.HexColor("#1F4E79")))
-    styles.add(ParagraphStyle(name="H2Custom", parent=styles["Heading2"], fontSize=11, leading=14, textColor=colors.HexColor("#1F4E79")))
-    return styles
+    s = getSampleStyleSheet()
+    s.add(ParagraphStyle(name="BodyCustom", parent=s["BodyText"], fontSize=8.1, leading=10.4))
+    s.add(ParagraphStyle(name="SmallCustom", parent=s["BodyText"], fontSize=6.0, leading=7.3))
+    s.add(ParagraphStyle(name="TitleCustom", parent=s["Title"], fontSize=16, leading=19, textColor=colors.HexColor("#1F4E79")))
+    s.add(ParagraphStyle(name="H2Custom", parent=s["Heading2"], fontSize=10.5, leading=13, textColor=colors.HexColor("#1F4E79")))
+    return s
 
 
-def _style_table(table: Table, font_size: float = 6.2) -> Table:
+def _style_table(table: Table, font_size=6.1):
     table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1F4E79")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
-        ("FONTSIZE", (0, 0), (-1, -1), font_size),
-        ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#C9D6E2")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F7FAFC")]),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("ALIGN", (1, 1), (-1, -1), "CENTER"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 2.5),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 2.5),
-        ("TOPPADDING", (0, 0), (-1, -1), 2),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-    ]))
-    return table
+        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#1F4E79")), ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"), ("FONTSIZE", (0,0), (-1,-1), font_size),
+        ("GRID", (0,0), (-1,-1), .3, colors.HexColor("#C9D6E2")), ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#F7FAFC")]),
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"), ("ALIGN", (1,1), (-1,-1), "CENTER"),
+        ("LEFTPADDING", (0,0), (-1,-1), 2.3), ("RIGHTPADDING", (0,0), (-1,-1), 2.3), ("TOPPADDING", (0,0), (-1,-1), 2), ("BOTTOMPADDING", (0,0), (-1,-1), 2),
+    ])); return table
 
 
 def _footer(canvas, doc):
-    canvas.saveState()
-    canvas.setFont("Helvetica", 7)
-    canvas.setFillColor(colors.grey)
-    canvas.drawString(1.4 * cm, 0.8 * cm, "Torre de Control COPEC - Informe automático")
-    canvas.drawRightString(A4[0] - 1.4 * cm, 0.8 * cm, f"Página {doc.page}")
-    canvas.restoreState()
+    canvas.saveState(); canvas.setFont("Helvetica", 7); canvas.setFillColor(colors.grey)
+    canvas.drawString(1.4*cm, .8*cm, "Torre de Control COPEC - Informe automático")
+    canvas.drawRightString(A4[0]-1.4*cm, .8*cm, f"Página {doc.page}"); canvas.restoreState()
 
 
-def _plot_line(labels: list[str], series: dict[str, list[int]], title: str, ylabel: str, path: Path) -> None:
-    plt.figure(figsize=(8.6, 4.0))
-    for label, values in series.items():
-        plt.plot(labels, values, marker="o", label=label)
-    plt.title(title)
-    plt.ylabel(ylabel)
-    plt.xticks(rotation=15)
-    plt.grid(True, alpha=0.25)
-    if len(series) > 1:
-        plt.legend(fontsize=7.5, ncol=3, loc="upper center", bbox_to_anchor=(0.5, -0.2))
-    plt.tight_layout()
-    plt.savefig(path, dpi=140, bbox_inches="tight")
-    plt.close()
+def _plot_line(labels, series, title, ylabel, path):
+    plt.figure(figsize=(8.6, 3.8))
+    for label, values in series.items(): plt.plot(labels, values, marker="o", linewidth=2, label=label)
+    plt.title(title); plt.ylabel(ylabel); plt.grid(True, alpha=.25); plt.xticks(rotation=15)
+    if len(series) > 1: plt.legend(fontsize=7, ncol=3, loc="upper center", bbox_to_anchor=(.5,-.2))
+    plt.tight_layout(); plt.savefig(path, dpi=140, bbox_inches="tight"); plt.close()
 
 
-def _plot_bar(labels: list[str], values: Iterable[int], title: str, xlabel: str, path: Path) -> None:
-    plt.figure(figsize=(8.2, 4.8))
-    plt.barh(labels[::-1], list(values)[::-1])
-    plt.title(title)
-    plt.xlabel(xlabel)
-    plt.tight_layout()
-    plt.savefig(path, dpi=140)
-    plt.close()
+def _plot_bar(labels, values: Iterable[int], title, xlabel, path):
+    plt.figure(figsize=(8.4, 4.2)); plt.barh(labels[::-1], list(values)[::-1]); plt.title(title); plt.xlabel(xlabel)
+    plt.tight_layout(); plt.savefig(path, dpi=140); plt.close()
 
 
-def _plot_heatmap(matrix: pd.DataFrame, title: str, path: Path) -> None:
-    if matrix.empty:
-        matrix = pd.DataFrame([[0]], index=["Sin datos"], columns=["Sin datos"])
-    plt.figure(figsize=(9.2, 5.4))
-    plt.imshow(matrix.values, aspect="auto")
-    plt.xticks(range(len(matrix.columns)), [wrap_label(c, 13) for c in matrix.columns], rotation=30, ha="right", fontsize=7)
-    plt.yticks(range(len(matrix.index)), [truncate(x, 30) for x in matrix.index], fontsize=7)
-    for i in range(matrix.shape[0]):
-        for j in range(matrix.shape[1]):
-            value = int(matrix.values[i, j])
-            if value:
-                plt.text(j, i, str(value), ha="center", va="center", fontsize=7)
-    plt.title(title)
-    plt.tight_layout()
-    plt.savefig(path, dpi=140)
-    plt.close()
-
-
-def _week_slice(data: pd.DataFrame, start: date, end: date) -> pd.DataFrame:
-    start_ts = pd.Timestamp(start)
-    end_ts = pd.Timestamp(datetime.combine(end, datetime.max.time()))
-    return data[(data["Fecha"] >= start_ts) & (data["Fecha"] <= end_ts)].copy()
-
-
-def _weekly_metrics(data: pd.DataFrame, ranges) -> tuple[list[int], dict[str, list[int]]]:
-    totals = []
-    types = data["Tipo"].value_counts().head(5).index.tolist()
-    by_type = {t: [] for t in types}
-    for _, start, end in ranges:
-        week = data[(data["Fecha"] >= start) & (data["Fecha"] <= end)]
-        totals.append(len(week))
-        for t in types:
-            by_type[t].append(int((week["Tipo"] == t).sum()))
+def _metrics(data, ranges):
+    top_types = data["Tipo"].value_counts().head(4).index.tolist()
+    totals, by_type = [], {t: [] for t in top_types}
+    for _, s, e in ranges:
+        x = data[(data["Fecha"] >= s) & (data["Fecha"] <= e)]
+        totals.append(len(x))
+        for t in top_types: by_type[t].append(int((x["Tipo"] == t).sum()))
     return totals, by_type
 
 
-def generate_global_report(data: pd.DataFrame, config: ReportConfig, output_dir: Path) -> Path:
-    styles = _styles()
-    current = _week_slice(data, config.week_start, config.week_end)
-    ranges = comparison_ranges(config.week_start, config.comparison_weeks)
-    labels = [r[0] for r in ranges]
-    totals, by_type = _weekly_metrics(data, ranges)
-    previous = data[(data["Fecha"] >= ranges[-2][1]) & (data["Fecha"] <= ranges[-2][2])] if len(ranges) > 1 else current.iloc[0:0]
-
-    charts = output_dir / "charts_global"
-    charts.mkdir(parents=True, exist_ok=True)
-    p_evol = charts / "evolucion_total.png"
-    p_types = charts / "evolucion_tipos.png"
-    p_comp = charts / "empresas.png"
-    p_drv = charts / "conductores.png"
-    p_heat = charts / "heatmap.png"
-
-    _plot_line(labels, {"Alertas": totals}, "Evolución semanal de alertas", "Alertas", p_evol)
-    _plot_line(labels, by_type or {"Sin datos": [0] * len(labels)}, "Evolución semanal por tipo de alerta", "Alertas", p_types)
-
-    rank_trans = current.groupby("Transportista").agg(
-        Alertas=("ID", "count"), Conductores=("Conductor", "nunique"),
-        Equipos=("Tracto", "nunique"), Fatiga=("Tipo", lambda s: int((s == "Fatiga").sum())),
-    ).reset_index().sort_values(["Alertas", "Fatiga"], ascending=False)
-    prev_trans = previous.groupby("Transportista").size()
-    rank_trans["Semana anterior"] = rank_trans["Transportista"].map(prev_trans).fillna(0).astype(int)
-    rank_trans["Tendencia"] = np.where(rank_trans["Alertas"] > rank_trans["Semana anterior"], "↑", np.where(rank_trans["Alertas"] < rank_trans["Semana anterior"], "↓", "↔"))
-
-    drivers = driver_ranking(current, 12, include_transportista=True)
-    prev_drv = previous.groupby("Conductor").size()
-    drivers["Semana anterior"] = drivers["Conductor"].map(prev_drv).fillna(0).astype(int)
-    drivers["Tendencia"] = np.where(drivers["Alertas"] > drivers["Semana anterior"], "↑", np.where(drivers["Alertas"] < drivers["Semana anterior"], "↓", "↔"))
-
-    _plot_bar([wrap_label(x, 24) for x in rank_trans.head(10)["Transportista"]], rank_trans.head(10)["Alertas"], "Top empresas por alertas", "Alertas", p_comp)
-    _plot_bar([wrap_label(f"{r.Conductor} ({r.Transportista})", 30) for r in drivers.head(10).itertuples()], drivers.head(10)["Alertas"], "Top conductores por alertas", "Alertas", p_drv)
-
-    top_companies = rank_trans.head(10)["Transportista"].tolist()
-    top_types = current["Tipo"].value_counts().head(6).index.tolist()
-    matrix = current[current["Transportista"].isin(top_companies) & current["Tipo"].isin(top_types)].pivot_table(
-        index="Transportista", columns="Tipo", values="ID", aggfunc="count", fill_value=0
-    )
-    if top_companies and top_types:
-        matrix = matrix.reindex(index=top_companies, columns=top_types).fillna(0)
-    _plot_heatmap(matrix, "Matriz empresa vs tipo de alerta", p_heat)
-
-    total = len(current)
-    guardian = int((current["Plataforma"] == "GUARDIAN").sum())
-    flotago = int((current["Plataforma"] == "FLOTAGO").sum())
-    fatigue_total, fatigue_yes, fatigue_no, fatigue_pending, fatigue_pct = compliance_summary(current)
-    recurrence = recurrence_summary(current)
-    previous_total = len(previous)
-    variation = pct_change(total, previous_total)
-
-    pdf = output_dir / f"00_Informe_Global_COPEC_{config.week_start:%d%m}_{config.week_end:%d%m%Y}.pdf"
-    doc = SimpleDocTemplate(str(pdf), pagesize=A4, rightMargin=1.1 * cm, leftMargin=1.1 * cm, topMargin=1.0 * cm, bottomMargin=1.2 * cm)
-    elements = []
-
-    elements += [
-        Paragraph("INFORME SEMANAL GLOBAL COPEC", styles["TitleCustom"]),
-        Paragraph(f"Período: {config.week_start:%d-%m-%Y} al {config.week_end:%d-%m-%Y} - Guardian y FlotaGO", styles["BodyCustom"]),
-        Spacer(1, 8), Paragraph("1. Dashboard ejecutivo", styles["H2Custom"]),
-    ]
-    kpi = [
-        ["Indicador", "Valor"], ["Total alertas", total], ["Variación semanal", variation],
-        ["Guardian", guardian], ["FlotaGO", flotago], ["Transportistas", current["Transportista"].nunique()],
-        ["Conductores", current["Conductor"].nunique()], ["Equipos", current["Tracto"].nunique()],
-        ["Fatiga", fatigue_total], ["Cumplimiento fatiga", f"{fatigue_pct:.1f}%"],
-        ["Conductores reincidentes (3+)", recurrence["three_plus"]], ["% reincidencia", f"{recurrence['rate']:.1f}%"],
-    ]
-    sem = [
-        ["Indicador", "Actual", "Semana anterior", "Tendencia"],
-        ["Alertas", total, previous_total, "↓" if total < previous_total else ("↑" if total > previous_total else "↔")],
-        ["Fatiga", fatigue_total, int((previous["Tipo"] == "Fatiga").sum()), "↓" if fatigue_total < int((previous["Tipo"] == "Fatiga").sum()) else "↑"],
-        ["Reincidentes", recurrence["three_plus"], recurrence_summary(previous)["three_plus"], "↓" if recurrence["three_plus"] < recurrence_summary(previous)["three_plus"] else "↑"],
-    ]
-    elements += [
-        Table([[_style_table(Table(kpi, colWidths=[4.2 * cm, 3.0 * cm]), 6.5), _style_table(Table(sem, colWidths=[3.5 * cm, 2.0 * cm, 2.4 * cm, 1.3 * cm]), 6.2)]], colWidths=[7.5 * cm, 10.4 * cm], style=[("VALIGN", (0, 0), (-1, -1), "TOP")]),
-        Spacer(1, 8), Image(str(p_evol), width=18 * cm, height=7.2 * cm), PageBreak(),
-    ]
-
-    elements += [
-        Paragraph("TENDENCIAS OPERACIONALES", styles["TitleCustom"]),
-        Paragraph("2. Evolución semanal por tipo de alerta", styles["H2Custom"]),
-        Image(str(p_types), width=18 * cm, height=8.2 * cm), Spacer(1, 8),
-        Paragraph(f"La operación registra una variación de {variation} respecto de la semana anterior. La lectura debe enfocarse en los tipos de alerta que presentan tendencia al alza.", styles["BodyCustom"]),
-        PageBreak(),
-    ]
-
-    comp_rows = [["Empresa", "Alertas", "% total", "Sem. ant.", "Tend.", "Conductores", "Fatiga"]]
-    for _, r in rank_trans.head(10).iterrows():
-        comp_rows.append([
-            Paragraph(truncate(r["Transportista"], 35), styles["SmallCustom"]), int(r["Alertas"]),
-            f"{(r['Alertas'] / max(total, 1) * 100):.1f}%", int(r["Semana anterior"]), r["Tendencia"],
-            int(r["Conductores"]), int(r["Fatiga"]),
-        ])
-    elements += [
-        Paragraph("EMPRESAS DE TRANSPORTE", styles["TitleCustom"]),
-        Paragraph("3. Empresas con mayor cantidad de alertas", styles["H2Custom"]),
-        Image(str(p_comp), width=18 * cm, height=8.0 * cm), Spacer(1, 8),
-        _style_table(Table(comp_rows, colWidths=[5.8 * cm, 1.4 * cm, 1.5 * cm, 1.6 * cm, 1.1 * cm, 1.8 * cm, 1.3 * cm]), 5.7),
-        PageBreak(),
-    ]
-
-    drv_rows = [["Conductor", "Empresa", "Alertas", "Días", "Fatiga", "Celular", "Sem. ant.", "Tend."]]
-    for _, r in drivers.head(10).iterrows():
-        drv_rows.append([
-            Paragraph(truncate(r["Conductor"], 28), styles["SmallCustom"]),
-            Paragraph(truncate(r["Transportista"], 28), styles["SmallCustom"]),
-            int(r["Alertas"]), int(r["Dias"]), int(r["Fatiga"]), int(r["Celular"]), int(r["Semana anterior"]), r["Tendencia"],
-        ])
-    elements += [
-        Paragraph("CONDUCTORES CRÍTICOS", styles["TitleCustom"]),
-        Paragraph("4. Conductores con mayor concentración de alertas", styles["H2Custom"]),
-        Image(str(p_drv), width=18 * cm, height=8.0 * cm), Spacer(1, 8),
-        _style_table(Table(drv_rows, colWidths=[4.2 * cm, 4.0 * cm, 1.3 * cm, 1.0 * cm, 1.2 * cm, 1.2 * cm, 1.5 * cm, 1.1 * cm]), 5.5),
-        PageBreak(),
-    ]
-
-    fatigue_rows = [
-        ["Indicador", "Resultado"], ["Alertas de fatiga", fatigue_total], ["Cumplen 15 minutos", fatigue_yes],
-        ["No cumplen", fatigue_no], ["Pendientes", fatigue_pending], ["Cumplimiento", f"{fatigue_pct:.1f}%"],
-    ]
-    recurrence_rows = [
-        ["Indicador", "Conductores"], ["Con 1 alerta", recurrence["one"]], ["Con 2 alertas", recurrence["two"]],
-        ["Con 3 o más alertas", recurrence["three_plus"]], ["% reincidencia", f"{recurrence['rate']:.1f}%"],
-    ]
-    elements += [
-        Paragraph("GESTIÓN DE FATIGA Y REINCIDENCIA", styles["TitleCustom"]),
-        Paragraph("5. Cumplimiento del protocolo y concentración de alertas", styles["H2Custom"]),
-        Table([[_style_table(Table(fatigue_rows, colWidths=[5.8 * cm, 3.0 * cm]), 6.4), _style_table(Table(recurrence_rows, colWidths=[5.2 * cm, 3.2 * cm]), 6.4)]], colWidths=[9.2 * cm, 8.7 * cm], style=[("VALIGN", (0, 0), (-1, -1), "TOP")]),
-        Spacer(1, 10), Paragraph("La reincidencia identifica si las alertas se concentran en un grupo reducido de conductores. Se consideran reincidentes quienes registran tres o más eventos en la semana.", styles["BodyCustom"]),
-        PageBreak(),
-    ]
-
-    elements += [
-        Paragraph("HALLAZGOS OPERACIONALES", styles["TitleCustom"]),
-        Paragraph("6. Matriz empresa y tipo de alerta", styles["H2Custom"]),
-        Image(str(p_heat), width=18 * cm, height=9.6 * cm), PageBreak(),
-    ]
-
-    actions = [
-        ["Hallazgo", "Acción recomendada"],
-        ["Empresas con aumento de alertas", "Solicitar análisis causal y plan correctivo semanal."],
-        ["Conductores reincidentes", "Realizar retroalimentación individual y seguimiento de reincidencia."],
-        ["Aumento de fatiga", "Reforzar gestión inmediata y cumplimiento del descanso mínimo."],
-        ["Alertas de cámara", "Revisar instalación, mantención y posible manipulación del dispositivo."],
-        ["Uso de celular / cinturón", "Aplicar campañas focalizadas y medidas correctivas con el transportista."],
-    ]
-    elements += [
-        Paragraph("CONCLUSIONES Y PLAN DE ACCIÓN", styles["TitleCustom"]),
-        Paragraph("7. Priorización para la semana siguiente", styles["H2Custom"]),
-        _style_table(Table([[Paragraph(str(a), styles["SmallCustom"]), Paragraph(str(b), styles["SmallCustom"])] for a, b in actions], colWidths=[5.3 * cm, 11.7 * cm]), 6.0),
-        Spacer(1, 10), Paragraph(f"La semana analizada registra {total} alertas y una variación de {variation}. La prioridad debe centrarse en empresas con tendencia al alza, conductores reincidentes y eventos de fatiga sin cumplimiento del protocolo.", styles["BodyCustom"]),
-    ]
-    doc.build(elements, onFirstPage=_footer, onLaterPages=_footer)
-    return pdf
+def _insights(current, previous, rank_trans=None, drivers=None):
+    total, prev = len(current), len(previous)
+    insights = [f"Las alertas presentan una variación de {pct_change(total, prev)} respecto del período anterior."]
+    types = current["Tipo"].value_counts()
+    if len(types): insights.append(f"El tipo más frecuente es {types.index[0]} con {int(types.iloc[0])} eventos ({types.iloc[0]/max(total,1)*100:.1f}% del total).")
+    if drivers is not None and len(drivers):
+        concentration = drivers.head(10)["Alertas"].sum() / max(total,1) * 100
+        insights.append(f"Los 10 conductores más críticos concentran {concentration:.1f}% de las alertas del período.")
+    if rank_trans is not None and len(rank_trans): insights.append(f"{rank_trans.iloc[0]['Transportista']} lidera el ranking con {int(rank_trans.iloc[0]['Alertas'])} alertas.")
+    ft, fy, fn, fp, pct = compliance_summary(current)
+    if ft: insights.append(f"El cumplimiento registrado del protocolo de fatiga alcanza {pct:.1f}% ({fn} no cumplimientos y {fp} pendientes).")
+    return insights[:5]
 
 
-def generate_transportista_report(data: pd.DataFrame, transportista: str, config: ReportConfig, output_dir: Path, index: int) -> Path:
-    styles = _styles()
-    all_t = data[data["Transportista"] == transportista].copy()
-    current = _week_slice(all_t, config.week_start, config.week_end)
-    ranges = comparison_ranges(config.week_start, config.comparison_weeks)
-    labels = [r[0] for r in ranges]
-    totals, by_type = _weekly_metrics(all_t, ranges)
-    previous = all_t[(all_t["Fecha"] >= ranges[-2][1]) & (all_t["Fecha"] <= ranges[-2][2])] if len(ranges) > 1 else current.iloc[0:0]
-
-    chart_dir = output_dir / f"charts_{index:02d}"
-    chart_dir.mkdir(parents=True, exist_ok=True)
-    p_evol = chart_dir / "evolucion.png"
-    p_types = chart_dir / "tipos.png"
-    p_drivers = chart_dir / "conductores.png"
-    _plot_line(labels, {"Alertas": totals}, "Evolución semanal de alertas", "Alertas", p_evol)
-    _plot_line(labels, by_type or {"Sin datos": [0] * len(labels)}, "Evolución semanal por tipo de alerta", "Alertas", p_types)
-
-    drivers = driver_ranking(current, 10, include_transportista=False)
-    prev_drv = previous.groupby("Conductor").size()
-    drivers["Semana anterior"] = drivers["Conductor"].map(prev_drv).fillna(0).astype(int)
-    drivers["Tendencia"] = np.where(drivers["Alertas"] > drivers["Semana anterior"], "↑", np.where(drivers["Alertas"] < drivers["Semana anterior"], "↓", "↔"))
-    _plot_bar([wrap_label(x, 25) for x in drivers.head(10)["Conductor"]], drivers.head(10)["Alertas"], "Conductores con más alertas", "Alertas", p_drivers)
-
-    total = len(current)
-    previous_total = len(previous)
-    fatigue_total, fatigue_yes, fatigue_no, fatigue_pending, fatigue_pct = compliance_summary(current)
-    recurrence = recurrence_summary(current)
-    variation = pct_change(total, previous_total)
-
-    pdf = output_dir / f"{index:02d}_Informe_{safe_filename(transportista)}_{config.week_start:%d%m}_{config.week_end:%d%m%Y}.pdf"
-    doc = SimpleDocTemplate(str(pdf), pagesize=A4, rightMargin=1.1 * cm, leftMargin=1.1 * cm, topMargin=1.0 * cm, bottomMargin=1.2 * cm)
-    elements = [
-        Paragraph("INFORME SEMANAL DE ALERTAS", styles["TitleCustom"]),
-        Paragraph(f"Transportista: {transportista}<br/>Período: {config.week_start:%d-%m-%Y} al {config.week_end:%d-%m-%Y}", styles["BodyCustom"]),
-        Spacer(1, 8), Paragraph("1. Resumen ejecutivo", styles["H2Custom"]),
-    ]
-    kpi = [
-        ["Indicador", "Valor"], ["Total alertas", total], ["Semana anterior", previous_total], ["Variación", variation],
-        ["Guardian", int((current["Plataforma"] == "GUARDIAN").sum())], ["FlotaGO", int((current["Plataforma"] == "FLOTAGO").sum())],
-        ["Conductores", current["Conductor"].nunique()], ["Equipos", current["Tracto"].nunique()], ["Fatiga", fatigue_total],
-        ["Cumplimiento fatiga", f"{fatigue_pct:.1f}%"], ["Conductores reincidentes", recurrence["three_plus"]],
-    ]
-    elements += [_style_table(Table(kpi, colWidths=[5.0 * cm, 3.3 * cm]), 6.5), Spacer(1, 8), Image(str(p_evol), width=18 * cm, height=7.2 * cm), PageBreak()]
-    elements += [Paragraph("TENDENCIAS", styles["TitleCustom"]), Paragraph("2. Evolución por tipo de alerta", styles["H2Custom"]), Image(str(p_types), width=18 * cm, height=8.4 * cm), PageBreak()]
-
-    rows = [["Conductor", "Alertas", "Días", "Fatiga", "Celular", "Sem. ant.", "Tend."]]
-    for _, r in drivers.iterrows():
-        rows.append([Paragraph(truncate(r["Conductor"], 38), styles["SmallCustom"]), int(r["Alertas"]), int(r["Dias"]), int(r["Fatiga"]), int(r["Celular"]), int(r["Semana anterior"]), r["Tendencia"]])
-    elements += [
-        Paragraph("CONDUCTORES Y REINCIDENCIA", styles["TitleCustom"]),
-        Paragraph("3. Conductores con mayor cantidad de alertas", styles["H2Custom"]),
-        Image(str(p_drivers), width=18 * cm, height=7.5 * cm), Spacer(1, 8),
-        _style_table(Table(rows, colWidths=[6.1 * cm, 1.5 * cm, 1.2 * cm, 1.3 * cm, 1.3 * cm, 1.6 * cm, 1.1 * cm]), 5.8),
-        PageBreak(),
-    ]
-
-    fatigue_rows = [
-        ["Indicador", "Resultado"], ["Fatiga", fatigue_total], ["Cumplen 15 minutos", fatigue_yes],
-        ["No cumplen", fatigue_no], ["Pendientes", fatigue_pending], ["Cumplimiento", f"{fatigue_pct:.1f}%"],
-    ]
-    rec_rows = [
-        ["Reincidencia", "Conductores"], ["1 alerta", recurrence["one"]], ["2 alertas", recurrence["two"]],
-        ["3 o más alertas", recurrence["three_plus"]], ["% reincidencia", f"{recurrence['rate']:.1f}%"],
-    ]
-    elements += [
-        Paragraph("FATIGA Y CONCLUSIONES", styles["TitleCustom"]),
-        Paragraph("4. Cumplimiento y reincidencia", styles["H2Custom"]),
-        Table([[_style_table(Table(fatigue_rows, colWidths=[5.5 * cm, 3.2 * cm]), 6.4), _style_table(Table(rec_rows, colWidths=[5.2 * cm, 3.2 * cm]), 6.4)]], colWidths=[9.1 * cm, 8.6 * cm], style=[("VALIGN", (0, 0), (-1, -1), "TOP")]),
-        Spacer(1, 10), Paragraph(f"<b>Conclusión preventiva:</b> El transportista registra {total} alertas y una variación de {variation} respecto de la semana anterior. Se recomienda concentrar la gestión en los conductores reincidentes y en las alertas que presentan tendencia al alza.", styles["BodyCustom"]),
-    ]
-    doc.build(elements, onFirstPage=_footer, onLaterPages=_footer)
-    return pdf
+def _rank_transportistas(current, previous):
+    r = current.groupby("Transportista").agg(Alertas=("ID","count"), Conductores=("Conductor","nunique"), Equipos=("Tracto","nunique"), Fatiga=("Tipo",lambda s:int((s=="Fatiga").sum())), Puntaje=("Puntaje","sum")).reset_index()
+    p = previous.groupby("Transportista").size()
+    r["Anterior"] = r["Transportista"].map(p).fillna(0).astype(int)
+    r["Variación"] = [pct_change(a,b) for a,b in zip(r.Alertas,r.Anterior)]
+    r["Tendencia"] = [trend_symbol(a,b) for a,b in zip(r.Alertas,r.Anterior)]
+    r["Estado"] = [risk_level(s,a,f) for s,a,f in zip(r.Puntaje,r.Alertas,r.Fatiga)]
+    return r.sort_values(["Puntaje","Fatiga","Alertas"], ascending=False)
 
 
-def generate_reports(data: pd.DataFrame, config: ReportConfig) -> tuple[bytes | None, bytes | None, dict]:
-    data = filter_real_transportistas(data)
-    current = _week_slice(data, config.week_start, config.week_end)
-    if current.empty:
-        raise ValueError("No existen alertas dentro del período seleccionado.")
+def generate_global_report(data, config, output_dir):
+    styles = _styles(); current = _period_slice(data, config.period_start, config.period_end)
+    ranges = comparison_ranges(config); labels=[x[0] for x in ranges]; totals, by_type = _metrics(data, ranges)
+    previous = data[(data["Fecha"]>=ranges[-2][1]) & (data["Fecha"]<=ranges[-2][2])] if len(ranges)>1 else current.iloc[0:0]
+    rank_t = _rank_transportistas(current, previous); drivers = detailed_driver_ranking(current, previous, config.top_drivers, True)
+    chart_dir=output_dir/"charts_global"; chart_dir.mkdir(exist_ok=True)
+    p_total=chart_dir/"total.png"; p_type=chart_dir/"tipos.png"; p_trans=chart_dir/"transportistas.png"; p_drv=chart_dir/"conductores.png"
+    unit="mensual" if config.report_mode.lower().startswith("mens") else "semanal"
+    _plot_line(labels,{"Alertas":totals},f"Evolución {unit} de alertas","Alertas",p_total)
+    _plot_line(labels,by_type or {"Sin datos":[0]*len(labels)},f"Tendencia {unit} por tipo de alerta","Alertas",p_type)
+    _plot_bar([wrap_label(x,24) for x in rank_t.head(10).Transportista],rank_t.head(10).Alertas,"Transportistas prioritarios","Alertas",p_trans)
+    _plot_bar([wrap_label(x,27) for x in drivers.head(10).Conductor],drivers.head(10).Puntaje,"Conductores por puntaje de criticidad","Puntaje",p_drv)
+    total=len(current); fatigue=compliance_summary(current); rec=recurrence_summary(current)
+    pdf=output_dir/f"00_Informe_Global_COPEC_{config.report_mode}_{config.period_start:%d%m}_{config.period_end:%d%m%Y}.pdf"
+    doc=SimpleDocTemplate(str(pdf),pagesize=A4,rightMargin=1.05*cm,leftMargin=1.05*cm,topMargin=.9*cm,bottomMargin=1.2*cm)
+    title=f"INFORME {config.report_mode.upper()} GLOBAL COPEC"
+    kpi=[["Indicador","Resultado"],["Total alertas",total],["Variación",pct_change(total,len(previous))],["Promedio diario",f"{total/max((config.period_end-config.period_start).days+1,1):.1f}"],["Transportistas",current.Transportista.nunique()],["Conductores",current.Conductor.nunique()],["Equipos",current.Tracto.nunique()],["Fatiga",fatigue[0]],["Cumplimiento fatiga",f"{fatigue[4]:.1f}%"],["Reincidentes 3+",rec['three_plus']]]
+    sem=[["Prioridad","Resultado"],["Transportistas críticos",int((rank_t.Estado=="CRÍTICO").sum())],["Conductores críticos",int((drivers.Nivel=="CRÍTICO").sum())],["No cumplimiento fatiga",fatigue[2]],["Pendientes fatiga",fatigue[3]],["Concentración Top 10",f"{drivers.head(10).Alertas.sum()/max(total,1)*100:.1f}%"]]
+    els=[Paragraph(title,styles["TitleCustom"]),Paragraph(f"Período: {config.period_start:%d-%m-%Y} al {config.period_end:%d-%m-%Y} · Guardian y FlotaGO",styles["BodyCustom"]),Spacer(1,6),Paragraph("1. Panel ejecutivo",styles["H2Custom"]),Table([[_style_table(Table(kpi,colWidths=[4.3*cm,2.7*cm]),6.3),_style_table(Table(sem,colWidths=[4.5*cm,2.7*cm]),6.3)]],colWidths=[8.5*cm,8.5*cm],style=[("VALIGN",(0,0),(-1,-1),"TOP")]),Spacer(1,5),Image(str(p_total),width=17.8*cm,height=7.3*cm)]
+    insights=_insights(current,previous,rank_t,drivers)
+    els += [Spacer(1,4),Paragraph("Decisiones rápidas",styles["H2Custom"]),_style_table(Table([[str(i+1),Paragraph(x,styles["SmallCustom"])] for i,x in enumerate(insights)],colWidths=[.7*cm,16.3*cm]),6.0),PageBreak()]
+    rows=[["Transportista","Alertas","Ant.","Var.","Fatiga","Reinc.","Estado"]]
+    for _,r in rank_t.head(12).iterrows():
+        rr=recurrence_summary(current[current.Transportista==r.Transportista])
+        rows.append([Paragraph(truncate(r.Transportista,31),styles["SmallCustom"]),int(r.Alertas),int(r.Anterior),r.Variación,int(r.Fatiga),rr['three_plus'],r.Estado])
+    els += [Paragraph("TRANSPORTISTAS Y TENDENCIAS",styles["TitleCustom"]),Paragraph("2. Dónde concentrar la gestión",styles["H2Custom"]),Image(str(p_trans),width=17.8*cm,height=7.0*cm),Spacer(1,5),_style_table(Table(rows,colWidths=[5.0*cm,1.3*cm,1.2*cm,1.4*cm,1.2*cm,1.3*cm,1.7*cm]),5.6),Spacer(1,5),Image(str(p_type),width=17.8*cm,height=6.3*cm),PageBreak()]
+    drows=[["Conductor","Empresa","Alertas","Puntos","Fatiga","Cel.","Cám.","Var.","Nivel"]]
+    for _,r in drivers.iterrows(): drows.append([Paragraph(truncate(r.Conductor,27),styles["SmallCustom"]),Paragraph(truncate(r.Transportista,23),styles["SmallCustom"]),int(r.Alertas),int(r.Puntaje),int(r.Fatiga),int(r.Celular),int(r["Cámaras"]),r.Variación,r.Nivel])
+    els += [Paragraph("CONDUCTORES CRÍTICOS",styles["TitleCustom"]),Paragraph("3. Ranking ponderado por severidad",styles["H2Custom"]),Image(str(p_drv),width=17.8*cm,height=7.0*cm),Spacer(1,5),_style_table(Table(drows,colWidths=[4.0*cm,3.3*cm,1.1*cm,1.1*cm,1.0*cm,1.0*cm,1.0*cm,1.3*cm,1.5*cm]),5.2),Spacer(1,5),Paragraph("El puntaje asigna mayor peso a fatiga, uso de celular, falta de cinturón y tapado de cámara. Esto permite priorizar riesgo y no solo volumen.",styles["BodyCustom"]),PageBreak()]
+    actions=[["Prioridad","Hallazgo","Acción sugerida"]]
+    for _,r in rank_t.head(5).iterrows(): actions.append([r.Estado,Paragraph(truncate(f"{r.Transportista}: {r.Alertas} alertas, variación {r.Variación}",60),styles["SmallCustom"]),Paragraph("Solicitar análisis causal, responsables y seguimiento del próximo período.",styles["SmallCustom"])])
+    actions += [["ALTA","Fatiga sin cumplimiento o pendiente","Revisar gestión, descansos y trazabilidad de llamados."],["ALTA","Conductores críticos recurrentes","Aplicar retroalimentación individual y verificar reincidencia."],["MEDIA","Alertas de cámara","Separar revisión técnica de posible manipulación."]]
+    els += [Paragraph("CONCLUSIONES Y PLAN DE ACCIÓN",styles["TitleCustom"]),Paragraph("4. Priorización ejecutiva",styles["H2Custom"]),_style_table(Table(actions,colWidths=[1.7*cm,7.2*cm,8.1*cm]),5.8),Spacer(1,8),Paragraph("Criterio recomendado: intervenir primero las combinaciones de alta severidad, tendencia creciente y reincidencia. Mantener seguimiento diferenciado para alertas técnicas de cámara.",styles["BodyCustom"])]
+    doc.build(els,onFirstPage=_footer,onLaterPages=_footer); return pdf
 
+
+def generate_transportista_report(data, transportista, config, output_dir, index):
+    styles=_styles(); all_t=data[data.Transportista==transportista].copy(); current=_period_slice(all_t,config.period_start,config.period_end)
+    ranges=comparison_ranges(config); labels=[x[0] for x in ranges]; totals,by_type=_metrics(all_t,ranges)
+    previous=all_t[(all_t.Fecha>=ranges[-2][1])&(all_t.Fecha<=ranges[-2][2])] if len(ranges)>1 else current.iloc[0:0]
+    drivers=detailed_driver_ranking(current,previous,config.top_drivers,False); fatigue=compliance_summary(current); rec=recurrence_summary(current)
+    chart=output_dir/f"charts_{index:02d}"; chart.mkdir(exist_ok=True); p1=chart/"evol.png"; p2=chart/"tipos.png"; p3=chart/"drivers.png"
+    unit="mensual" if config.report_mode.lower().startswith("mens") else "semanal"
+    _plot_line(labels,{"Alertas":totals},f"Evolución {unit}","Alertas",p1); _plot_line(labels,by_type or {"Sin datos":[0]*len(labels)},"Tendencia por tipo","Alertas",p2); _plot_bar([wrap_label(x,26) for x in drivers.head(10).Conductor],drivers.head(10).Puntaje,"Ranking de criticidad","Puntaje",p3)
+    pdf=output_dir/f"{index:02d}_Informe_{config.report_mode}_{safe_filename(transportista)}_{config.period_start:%d%m}_{config.period_end:%d%m%Y}.pdf"
+    doc=SimpleDocTemplate(str(pdf),pagesize=A4,rightMargin=1.05*cm,leftMargin=1.05*cm,topMargin=.9*cm,bottomMargin=1.2*cm)
+    total=len(current); kpi=[["Indicador","Resultado"],["Alertas",total],["Período anterior",len(previous)],["Variación",pct_change(total,len(previous))],["Promedio diario",f"{total/max((config.period_end-config.period_start).days+1,1):.1f}"],["Conductores",current.Conductor.nunique()],["Equipos",current.Tracto.nunique()],["Fatiga",fatigue[0]],["Cumplimiento",f"{fatigue[4]:.1f}%"],["Reincidentes 3+",rec['three_plus']]]
+    insights=_insights(current,previous,None,drivers)
+    els=[Paragraph(f"INFORME {config.report_mode.upper()} DE ALERTAS",styles["TitleCustom"]),Paragraph(f"Transportista: {transportista}<br/>Período: {config.period_start:%d-%m-%Y} al {config.period_end:%d-%m-%Y}",styles["BodyCustom"]),Spacer(1,6),Paragraph("1. Resumen ejecutivo",styles["H2Custom"]),Table([[_style_table(Table(kpi,colWidths=[4.4*cm,2.8*cm]),6.3),Image(str(p1),width=9.4*cm,height=6.1*cm)]],colWidths=[7.6*cm,9.6*cm],style=[("VALIGN",(0,0),(-1,-1),"TOP")]),Spacer(1,5),_style_table(Table([[str(i+1),Paragraph(x,styles["SmallCustom"])] for i,x in enumerate(insights)],colWidths=[.7*cm,16.3*cm]),6.0),Spacer(1,5),Image(str(p2),width=17.8*cm,height=6.6*cm),PageBreak()]
+    rows=[["Conductor","Alertas","Puntos","Fatiga","Celular","Cámaras","Ant.","Var.","Nivel"]]
+    for _,r in drivers.iterrows(): rows.append([Paragraph(truncate(r.Conductor,34),styles["SmallCustom"]),int(r.Alertas),int(r.Puntaje),int(r.Fatiga),int(r.Celular),int(r["Cámaras"]),int(r.Anterior),r.Variación,r.Nivel])
+    els += [Paragraph("CONDUCTORES Y TENDENCIAS",styles["TitleCustom"]),Paragraph("2. Ranking detallado por riesgo",styles["H2Custom"]),Image(str(p3),width=17.8*cm,height=7.2*cm),Spacer(1,5),_style_table(Table(rows,colWidths=[5.2*cm,1.0*cm,1.0*cm,1.0*cm,1.0*cm,1.1*cm,1.0*cm,1.3*cm,1.4*cm]),5.2),Spacer(1,5),Paragraph("La tendencia compara cada conductor con el período inmediatamente anterior. El puntaje pondera la severidad de cada tipo de alerta.",styles["BodyCustom"]),PageBreak()]
+    types=current.Tipo.value_counts().head(8); type_rows=[["Tipo de alerta","Cantidad","% total"]]+[[t,int(v),f"{v/max(total,1)*100:.1f}%"] for t,v in types.items()]
+    actions=[["Prioridad","Acción recomendada"],["Alta","Gestionar conductores críticos y reincidentes con seguimiento individual."],["Alta","Revisar todos los no cumplimientos y pendientes de fatiga."],["Media","Separar fallas técnicas de cámara de posibles manipulaciones."],["Media","Comparar el resultado en el siguiente período y verificar reducción."]]
+    els += [Paragraph("COMPOSICIÓN Y ACCIONES",styles["TitleCustom"]),Paragraph("3. Tipos de alerta, fatiga y plan",styles["H2Custom"]),Table([[_style_table(Table(type_rows,colWidths=[4.8*cm,1.8*cm,1.8*cm]),6.0),_style_table(Table([["Fatiga","Resultado"],["Total",fatigue[0]],["Cumple",fatigue[1]],["No cumple",fatigue[2]],["Pendiente",fatigue[3]],["Cumplimiento",f"{fatigue[4]:.1f}%"]],colWidths=[4.5*cm,2.3*cm]),6.0)]],colWidths=[9.0*cm,8.0*cm],style=[("VALIGN",(0,0),(-1,-1),"TOP")]),Spacer(1,8),_style_table(Table(actions,colWidths=[2.0*cm,15.0*cm]),6.0)]
+    doc.build(els,onFirstPage=_footer,onLaterPages=_footer); return pdf
+
+
+def generate_reports(data, config):
+    data=filter_real_transportistas(data); current=_period_slice(data,config.period_start,config.period_end)
+    if current.empty: raise ValueError("No existen alertas dentro del período seleccionado.")
     with tempfile.TemporaryDirectory(prefix="copec_reports_") as tmp:
-        out = Path(tmp)
-        global_pdf_bytes = None
+        out=Path(tmp); global_bytes=None; report_paths=[]; global_path=None
         if config.include_global:
-            global_path = generate_global_report(data, config, out)
-            global_pdf_bytes = global_path.read_bytes()
-
-        report_paths: list[Path] = []
-        if config.include_transportistas:
-            transportistas = sorted(current["Transportista"].dropna().unique())
-            for i, transportista in enumerate(transportistas, start=1):
-                report_paths.append(generate_transportista_report(data, transportista, config, out, i))
-        else:
-            transportistas = []
-
-        zip_bytes = None
-        if config.include_transportistas or config.include_global:
-            buffer = io.BytesIO()
-            with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-                if config.include_global:
-                    zf.writestr(Path(global_path).name, global_pdf_bytes)
-                for path in report_paths:
-                    zf.write(path, arcname=path.name)
-            zip_bytes = buffer.getvalue()
-
-    summary = {
-        "total_alertas": len(current),
-        "transportistas": len(transportistas),
-        "conductores": current["Conductor"].nunique(),
-        "equipos": current["Tracto"].nunique(),
-        "fatiga": int((current["Tipo"] == "Fatiga").sum()),
-    }
-    return global_pdf_bytes, zip_bytes, summary
+            global_path=generate_global_report(data,config,out); global_bytes=global_path.read_bytes()
+        transportistas=sorted(current.Transportista.dropna().unique()) if config.include_transportistas else []
+        for i,t in enumerate(transportistas,1): report_paths.append(generate_transportista_report(data,t,config,out,i))
+        buffer=io.BytesIO()
+        with zipfile.ZipFile(buffer,"w",zipfile.ZIP_DEFLATED) as zf:
+            if global_path: zf.write(global_path,arcname=global_path.name)
+            for p in report_paths: zf.write(p,arcname=p.name)
+        zip_bytes=buffer.getvalue()
+    return global_bytes,zip_bytes,{"total_alertas":len(current),"transportistas":len(transportistas),"conductores":current.Conductor.nunique(),"equipos":current.Tracto.nunique(),"fatiga":int((current.Tipo=="Fatiga").sum()),"modo":config.report_mode}

@@ -115,7 +115,7 @@ def transportista_from_filename(filename: str) -> str:
     if "GLOBAL_COPEC" in normalize_text(stem).replace(" ", "_"):
         return "COPEC"
     # Formats: 01_Informe_EMPRESA_0607_12072026 or 01_Informe_Semanal_EMPRESA_...
-    cleaned = re.sub(r"^\d+_Informe(?:_Semanal)?_", "", stem, flags=re.IGNORECASE)
+    cleaned = re.sub(r"^\d+_Informe(?:_(?:Semanal|Mensual))?_", "", stem, flags=re.IGNORECASE)
     cleaned = re.sub(r"_\d{4}_\d{8}$", "", cleaned)
     cleaned = re.sub(r"_\d{4}_\d{4,8}$", "", cleaned)
     return cleaned.replace("_", " ").strip()
@@ -144,27 +144,27 @@ def build_dispatch_table(attachments: list[dict], catalog: pd.DataFrame) -> pd.D
     return pd.DataFrame(rows)
 
 
-def make_subject(transportista: str, start_label: str, end_label: str) -> str:
+def make_subject(transportista: str, start_label: str, end_label: str, mode: str = "semanal") -> str:
     if normalize_text(transportista) == "COPEC":
-        return f"Informe semanal global COPEC | {start_label} al {end_label}"
-    return f"Informe semanal de alertas | {transportista} | {start_label} al {end_label}"
+        return f"Informe {mode} global COPEC | {start_label} al {end_label}"
+    return f"Informe {mode} de alertas | {transportista} | {start_label} al {end_label}"
 
 
-def make_body(transportista: str, start_label: str, end_label: str) -> str:
+def make_body(transportista: str, start_label: str, end_label: str, mode: str = "semanal") -> str:
     if normalize_text(transportista) == "COPEC":
         return (
             "Estimados:\n\n"
-            f"Junto con saludar, se adjunta el Informe Semanal Global COPEC correspondiente al período "
+            f"Junto con saludar, se adjunta el Informe {mode.capitalize()} Global COPEC correspondiente al período "
             f"comprendido entre el {start_label} y el {end_label}.\n\n"
-            "El informe contiene la evolución semanal de alertas, empresas y conductores con mayor recurrencia, "
+            f"El informe contiene la evolución {mode} de alertas, empresas y conductores con mayor recurrencia, "
             "gestión de fatiga, cumplimiento del protocolo y principales hallazgos operacionales.\n\n"
             "Saludos cordiales,\nTorre de Control COPEC"
         )
     return (
         "Estimados:\n\n"
-        f"Junto con saludar, se adjunta el informe semanal de alertas de {transportista}, correspondiente al período "
+        f"Junto con saludar, se adjunta el informe {mode} de alertas de {transportista}, correspondiente al período "
         f"comprendido entre el {start_label} y el {end_label}.\n\n"
-        "El documento contiene la evolución de las alertas, comparación con semanas anteriores, conductores con mayor "
+        f"El documento contiene la evolución de las alertas, comparación con períodos anteriores, conductores con mayor "
         "recurrencia y estado de cumplimiento del protocolo asociado a eventos de fatiga.\n\n"
         "Solicitamos revisar los hallazgos y gestionar las desviaciones identificadas.\n\n"
         "Saludos cordiales,\nTorre de Control COPEC"
@@ -186,7 +186,8 @@ def prepare_email(
         raise ValueError(f"Correos inválidos para {transportista}: {', '.join(invalid)}")
     if not to:
         raise ValueError(f"No hay destinatario principal para {transportista}.")
-    subject = make_subject(transportista, start_label, end_label)
+    mode = "mensual" if "MENSUAL" in normalize_text(attachment.get("filename", "")) else "semanal"
+    subject = make_subject(transportista, start_label, end_label, mode)
     if test_recipient:
         subject = f"[PRUEBA] {subject}"
     return PreparedEmail(
@@ -194,7 +195,7 @@ def prepare_email(
         to=to,
         cc=cc,
         subject=subject,
-        body=make_body(transportista, start_label, end_label),
+        body=make_body(transportista, start_label, end_label, mode),
         attachment_name=attachment["filename"],
         attachment_bytes=attachment["bytes"],
     )

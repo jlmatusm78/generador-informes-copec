@@ -15,7 +15,7 @@ from email_engine import (
     read_pdf_attachments,
     send_batch,
 )
-from report_engine import ReportConfig, detect_default_week, generate_reports, load_data
+from report_engine import ReportConfig, detect_default_month, detect_default_week, generate_reports, load_data
 
 st.set_page_config(
     page_title="Generador de Informes COPEC",
@@ -24,7 +24,7 @@ st.set_page_config(
 )
 
 st.title("Generador Automático de Informes - Torre de Control COPEC")
-st.caption("Genera informes semanales en PDF y envíalos a cada transportista por correo, sin IRO.")
+st.caption("Genera informes ejecutivos semanales o mensuales en PDF, con tendencias, criticidad y envío por correo.")
 
 for key, default in {
     "global_pdf": None,
@@ -40,7 +40,9 @@ for key, default in {
 with st.sidebar:
     st.header("Configuración")
     uploaded = st.file_uploader("Archivo Excel de alertas", type=["xlsx", "xls"], key="alerts_file")
-    comparison_weeks = st.selectbox("Semanas a comparar", [3, 4, 5, 6], index=1)
+    report_mode = st.radio("Tipo de informe", ["Semanal", "Mensual"], horizontal=True)
+    comparison_periods = st.selectbox("Períodos para la tendencia", [3, 4, 6, 12], index=2 if report_mode == "Mensual" else 1)
+    top_drivers = st.slider("Conductores en ranking", 8, 20, 12)
     include_global = st.checkbox("Informe Global COPEC", value=True)
     include_transportistas = st.checkbox("Informes por transportista", value=True)
 
@@ -56,23 +58,26 @@ except Exception as exc:
 
 min_date = data["Fecha"].min().date()
 max_date = data["Fecha"].max().date()
-default_start, default_end = detect_default_week(data)
+default_start, default_end = detect_default_month(data) if report_mode == "Mensual" else detect_default_week(data)
 
 st.success(f"Archivo leído correctamente: {len(data):,} registros, desde {min_date:%d-%m-%Y} hasta {max_date:%d-%m-%Y}.")
 
-col1, col2 = st.columns(2)
-with col1:
-    week_start = st.date_input("Inicio de semana", value=default_start, min_value=min_date, max_value=max_date)
-with col2:
-    week_end = st.date_input("Fin de semana", value=default_end, min_value=min_date, max_value=max_date)
+if report_mode == "Mensual":
+    available_months = sorted(data["Fecha"].dt.to_period("M").unique(), reverse=True)
+    selected_month = st.selectbox("Mes del informe", available_months, format_func=lambda p: p.strftime("%B %Y"))
+    period_start, period_end = selected_month.start_time.date(), selected_month.end_time.date()
+else:
+    col1, col2 = st.columns(2)
+    with col1:
+        period_start = st.date_input("Inicio de semana", value=default_start, min_value=min_date, max_value=max_date)
+    with col2:
+        period_end = st.date_input("Fin de semana", value=default_end, min_value=min_date, max_value=max_date)
 
-if week_end < week_start:
+if period_end < period_start:
     st.error("La fecha final no puede ser anterior a la fecha inicial.")
     st.stop()
-if (week_end - week_start).days > 14:
-    st.warning("El rango seleccionado supera 14 días. El formato está optimizado para informes semanales.")
 
-current = data[(data["Fecha"].dt.date >= week_start) & (data["Fecha"].dt.date <= week_end)]
+current = data[(data["Fecha"].dt.date >= period_start) & (data["Fecha"].dt.date <= period_end)]
 m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("Alertas", f"{len(current):,}")
 m2.metric("Transportistas", current["Transportista"].nunique())
@@ -85,17 +90,19 @@ reports_tab, email_tab = st.tabs(["📄 Generación de informes", "✉️ Envío
 with reports_tab:
     st.subheader("Contenido de los informes")
     st.write(
-        "Evolución semanal, tendencias por tipo de alerta, semáforo ejecutivo, empresas y conductores críticos, "
-        "fatiga, cumplimiento del protocolo, reincidencia, matriz empresa/tipo de alerta y plan de acción."
+        "Panel ejecutivo, evolución por períodos, tendencias por tipo de alerta, ranking ponderado de transportistas y conductores, "
+        "fatiga, reincidencia, concentración de riesgo y plan de acción. Global COPEC: 4 páginas; transportistas: 3 páginas."
     )
 
     if st.button("Generar informes", type="primary", use_container_width=True):
         config = ReportConfig(
-            week_start=week_start,
-            week_end=week_end,
-            comparison_weeks=comparison_weeks,
+            period_start=period_start,
+            period_end=period_end,
+            report_mode=report_mode,
+            comparison_periods=comparison_periods,
             include_global=include_global,
             include_transportistas=include_transportistas,
+            top_drivers=top_drivers,
         )
         try:
             with st.spinner("Analizando datos y generando informes PDF..."):
@@ -125,7 +132,7 @@ with reports_tab:
             st.download_button(
                 "Descargar Informe Global COPEC",
                 data=st.session_state.global_pdf,
-                file_name=f"Informe_Global_COPEC_{week_start:%d%m}_{week_end:%d%m%Y}.pdf",
+                file_name=f"Informe_Global_COPEC_{report_mode}_{period_start:%d%m}_{period_end:%d%m%Y}.pdf",
                 mime="application/pdf",
                 use_container_width=True,
             )
@@ -133,7 +140,7 @@ with reports_tab:
             st.download_button(
                 "Descargar ZIP completo",
                 data=st.session_state.zip_bytes,
-                file_name=f"Informes_COPEC_{week_start:%d%m}_{week_end:%d%m%Y}.zip",
+                file_name=f"Informes_COPEC_{report_mode}_{period_start:%d%m}_{period_end:%d%m%Y}.zip",
                 mime="application/zip",
                 use_container_width=True,
             )
@@ -197,8 +204,8 @@ with email_tab:
         st.markdown(f"**CC:** {preview_row['CC'] or 'Sin copia'}")
         st.markdown(f"**Adjunto:** {preview_row['Informe']}")
         st.markdown(
-            f"**Asunto:** Informe semanal de alertas | {preview_name} | "
-            f"{week_start:%d-%m-%Y} al {week_end:%d-%m-%Y}"
+            f"**Asunto:** Informe {report_mode.lower()} de alertas | {preview_name} | "
+            f"{period_start:%d-%m-%Y} al {period_end:%d-%m-%Y}"
         )
 
     st.divider()
@@ -247,8 +254,8 @@ with email_tab:
                 email = prepare_email(
                     row,
                     attachment,
-                    week_start.strftime("%d-%m-%Y"),
-                    week_end.strftime("%d-%m-%Y"),
+                    period_start.strftime("%d-%m-%Y"),
+                    period_end.strftime("%d-%m-%Y"),
                     test_recipient=test_recipient,
                 )
                 results = send_batch(settings, [email])
@@ -267,15 +274,15 @@ with email_tab:
                 prepared = []
                 skipped = 0
                 for row in selected.to_dict("records"):
-                    key = f"{week_start}|{week_end}|{row['Informe']}|{row['Para']}"
+                    key = f"{report_mode}|{period_start}|{period_end}|{row['Informe']}|{row['Para']}"
                     if key in st.session_state.sent_keys:
                         skipped += 1
                         continue
                     prepared.append(prepare_email(
                         row,
                         attachment_lookup[row["Informe"]],
-                        week_start.strftime("%d-%m-%Y"),
-                        week_end.strftime("%d-%m-%Y"),
+                        period_start.strftime("%d-%m-%Y"),
+                        period_end.strftime("%d-%m-%Y"),
                     ))
                 if not prepared:
                     st.warning("Todos los informes seleccionados ya fueron enviados durante esta sesión.")
@@ -285,7 +292,7 @@ with email_tab:
                     st.session_state.send_log.extend(results)
                     for result, email in zip(results, prepared):
                         if result["Resultado"] == "Enviado":
-                            key = f"{week_start}|{week_end}|{email.attachment_name}|{';'.join(email.to)}"
+                            key = f"{report_mode}|{period_start}|{period_end}|{email.attachment_name}|{';'.join(email.to)}"
                             st.session_state.sent_keys.add(key)
                     ok = sum(r["Resultado"] == "Enviado" for r in results)
                     errors = len(results) - ok
