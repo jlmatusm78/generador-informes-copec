@@ -16,6 +16,13 @@ Aplicación Streamlit para generar informes semanales desde un Excel con hojas `
 - Selección de informes a enviar.
 - Protección contra envíos duplicados dentro de la sesión.
 - Registro descargable en CSV.
+- Riesgo operacional explicado en cada informe, sin índice genérico de criticidad.
+- Índice de reincidencia separado del riesgo operacional.
+- Comparación predeterminada de 4 semanas completas, de lunes a domingo; selección de 4, 5 o 6 semanas.
+- Comparación mensual configurable hasta 12 meses según la información disponible.
+- Ranking configurable de conductores, con Top 10 predeterminado.
+- PDF por transportista con anexo completo de eventos.
+- Excel por transportista con hojas Resumen, Ranking conductores, Evolución y Detalle eventos.
 
 ## Ejecutar localmente
 
@@ -92,6 +99,9 @@ Carga un Excel o CSV con estas columnas:
 
 La aplicación permite seleccionar **Semanal** o **Mensual** antes de generar los informes.
 
+Todos los PDF incluyen la cabecera institucional COPEC 90 años en la esquina
+superior izquierda, con proporción protegida y margen reservado para el contenido.
+
 - Informe Global COPEC: 4 páginas ejecutivas.
 - Informe por transportista: 3 páginas.
 - Tendencias configurables de 3, 4, 6 o 12 períodos.
@@ -101,4 +111,8 @@ La aplicación permite seleccionar **Semanal** o **Mensual** antes de generar lo
 - Indicadores de fatiga, reincidencia y concentración del riesgo.
 - Correos y nombres de archivos adaptados al modo semanal o mensual.
 
-El puntaje de criticidad pondera Fatiga (5), Uso celular (4), Sin cinturón y Tapado de cámara (3), Fumar y Sin conductor (2), Cámara desalineada y Bostezo (1).
+El riesgo operacional pondera Fatiga sin cumplimiento (10), Fatiga pendiente (8), Sin cinturón y Conductor fumando (6), y Fatiga con cumplimiento (3). El informe muestra el cálculo, la regla aplicada y el nivel resultante.
+
+Los nombres históricos se aceptan como alias internos, pero todos los informes,
+tablas y archivos exportados muestran únicamente `Sensor desalineado` y
+`Sensor Tapado`.

@@ -38,7 +38,7 @@ st.set_page_config(
 )
 
 st.title("Generador Automático de Informes - Torre de Control COPEC")
-st.caption("Genera informes ejecutivos semanales o mensuales en PDF, con tendencias, criticidad y envío por correo.")
+st.caption("Genera informes operacionales semanales o mensuales con riesgo explicable, reincidencia, detalle de eventos y envío por correo.")
 
 for key, default in {
     "global_pdf": None,
@@ -55,8 +55,6 @@ with st.sidebar:
     st.header("Configuración")
     uploaded = st.file_uploader("Archivo Excel de alertas", type=["xlsx", "xls"], key="alerts_file")
     report_mode = st.radio("Tipo de informe", ["Semanal", "Mensual"], horizontal=True)
-    comparison_periods = st.selectbox("Períodos para la tendencia", [3, 4, 6, 12], index=2 if report_mode == "Mensual" else 1)
-    top_drivers = st.slider("Conductores en ranking", 8, 20, 12)
     include_global = st.checkbox("Informe Global COPEC", value=True)
     include_transportistas = st.checkbox("Informes por transportista", value=True)
 
@@ -74,6 +72,27 @@ min_date = data["Fecha"].min().date()
 max_date = data["Fecha"].max().date()
 default_start, default_end = detect_default_month(data) if report_mode == "Mensual" else detect_default_week(data)
 
+with st.sidebar:
+    if report_mode == "Semanal":
+        comparison_periods = st.selectbox(
+            "Semanas para comparar",
+            [4, 5, 6],
+            index=0,
+            help="Cada semana comienza el lunes y termina el domingo.",
+        )
+    else:
+        available_month_count = max(1, int(data["Fecha"].dt.to_period("M").nunique()))
+        max_months = min(12, available_month_count)
+        month_options = list(range(3, max_months + 1)) if max_months >= 3 else [max_months]
+        default_months = min(6, max_months)
+        comparison_periods = st.selectbox(
+            "Meses para comparar",
+            month_options,
+            index=month_options.index(default_months) if default_months in month_options else 0,
+            help="Se muestran hasta 12 meses, limitado por la información disponible.",
+        )
+    top_drivers = st.slider("Conductores en el ranking", 5, 30, 10, 1)
+
 st.success(f"Archivo leído correctamente: {len(data):,} registros, desde {min_date:%d-%m-%Y} hasta {max_date:%d-%m-%Y}.")
 
 if report_mode == "Mensual":
@@ -88,11 +107,20 @@ if report_mode == "Mensual":
     period_end = selected_month.end_time.date()
     st.caption(f"El informe incluirá exclusivamente datos entre {period_start:%d-%m-%Y} y {period_end:%d-%m-%Y}.")
 else:
-    col1, col2 = st.columns(2)
-    with col1:
-        period_start = st.date_input("Inicio de semana", value=default_start, min_value=min_date, max_value=max_date)
-    with col2:
-        period_end = st.date_input("Fin de semana", value=default_end, min_value=min_date, max_value=max_date)
+    first_monday = min_date - pd.Timedelta(days=min_date.weekday())
+    available_weeks = []
+    cursor = default_start
+    while cursor >= first_monday:
+        available_weeks.append(cursor)
+        cursor -= pd.Timedelta(days=7)
+    period_start = st.selectbox(
+        "Semana del informe",
+        available_weeks,
+        index=0,
+        format_func=lambda start: f"Lun {start:%d-%m-%Y} → Dom {(start + pd.Timedelta(days=6)):%d-%m-%Y}",
+    )
+    period_end = period_start + pd.Timedelta(days=6)
+    st.caption(f"Semana completa: lunes {period_start:%d-%m-%Y} a domingo {period_end:%d-%m-%Y}.")
 
 if period_end < period_start:
     st.error("La fecha final no puede ser anterior a la fecha inicial.")
@@ -111,8 +139,8 @@ reports_tab, email_tab = st.tabs(["📄 Generación de informes", "✉️ Envío
 with reports_tab:
     st.subheader("Contenido de los informes")
     st.write(
-        "Panel ejecutivo, evolución por períodos, tendencias por tipo de alerta, ranking ponderado de transportistas y conductores, "
-        "fatiga, reincidencia, concentración de riesgo y plan de acción. Global COPEC: 4 páginas; transportistas: 3 páginas."
+        "Resumen ejecutivo, comparación histórica, riesgo operacional con cálculo explicado, reincidencia, ranking configurable, "
+        "plan de acción y detalle completo de eventos. Cada transportista recibe PDF y Excel con hojas de resumen, evolución, ranking y detalle."
     )
 
     if st.button("Generar informes", type="primary", use_container_width=True):
@@ -147,7 +175,7 @@ with reports_tab:
         c2.metric("Transportistas", summary["transportistas"])
         c3.metric("Conductores", summary["conductores"])
         c4.metric("Equipos", summary["equipos"])
-        c5.metric("Fatiga", summary["fatiga"])
+        c5.metric("Riesgo / reincidencia", f"{summary['riesgo']} · {summary['reincidencia']:.1f}%")
 
         if st.session_state.global_pdf:
             st.download_button(
