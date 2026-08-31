@@ -1,4 +1,5 @@
 import unittest
+import inspect
 from datetime import date
 
 import pandas as pd
@@ -10,6 +11,7 @@ from report_engine import (
     operational_risk_summary,
     recurrence_summary,
     sensor_alert_summary,
+    generate_transportista_report,
 )
 
 
@@ -61,6 +63,12 @@ class OperationalRiskTests(unittest.TestCase):
         self.assertEqual(result["recurrent"], 1)
         self.assertEqual(result["both"], 1)
         self.assertEqual(result["priority"], "ALTA")
+
+    def test_transportista_pdf_contains_sensor_analysis(self):
+        source = inspect.getsource(generate_transportista_report)
+        self.assertIn("Análisis técnico de alertas de sensores", source)
+        self.assertIn("_sensor_summary_table", source)
+        self.assertIn("_sensor_equipment_rows", source)
 
 
 if __name__ == "__main__":

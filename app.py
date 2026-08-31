@@ -37,6 +37,23 @@ st.set_page_config(
     layout="wide",
 )
 
+# Incrementar cuando cambia la estructura de los informes. Esto evita que una
+# sesión abierta en Streamlit siga ofreciendo PDFs/ZIP generados con código
+# anterior después de una actualización.
+REPORT_SCHEMA_VERSION = "2026.08.31-sensores-transportistas-v2"
+
+if st.session_state.get("report_schema_version") != REPORT_SCHEMA_VERSION:
+    for stale_key in (
+        "global_pdf",
+        "zip_bytes",
+        "generation_summary",
+        "dispatch_table",
+        "send_log",
+        "sent_keys",
+    ):
+        st.session_state.pop(stale_key, None)
+    st.session_state.report_schema_version = REPORT_SCHEMA_VERSION
+
 st.title("Generador Automático de Informes - Torre de Control COPEC")
 st.caption("Genera informes operacionales semanales o mensuales con riesgo explicable, reincidencia, detalle de eventos y envío por correo.")
 
@@ -140,7 +157,8 @@ with reports_tab:
     st.subheader("Contenido de los informes")
     st.write(
         "Resumen ejecutivo, comparación histórica, riesgo operacional con cálculo explicado, reincidencia, ranking configurable, "
-        "plan de acción y detalle completo de eventos. Cada transportista recibe PDF y Excel con hojas de resumen, evolución, ranking y detalle."
+        "análisis técnico de Sensor tapado y Sensor desalineado, plan de acción y detalle completo de eventos. "
+        "Cada transportista recibe PDF y Excel con hojas de resumen, evolución, ranking y detalle."
     )
 
     if st.button("Generar informes", type="primary", use_container_width=True):
