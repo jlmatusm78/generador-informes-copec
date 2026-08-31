@@ -102,10 +102,11 @@ La aplicación permite seleccionar **Semanal** o **Mensual** antes de generar lo
 Todos los PDF incluyen la cabecera institucional COPEC 90 años en la esquina
 superior izquierda, con proporción protegida y margen reservado para el contenido.
 
-- Informe Global COPEC: 5 páginas para toma de decisiones.
-- Informe por transportista: 5 páginas con la misma estructura ejecutiva.
+- Informe Global COPEC: 6 páginas para toma de decisiones.
+- Informe por transportista: 6 páginas con la misma estructura ejecutiva.
 - Hallazgos automáticos, evolución por tipo de alerta y variación contra el período anterior.
 - Concentración del riesgo, transportistas/conductores prioritarios y plan de acción con responsables y plazos.
+- Análisis técnico de Sensor Tapado y Sensor desalineado: evolución, tractos afectados, reincidencia y prioridades por transportista.
 - Tendencias configurables de 3, 4, 6 o 12 períodos.
 - Ranking ponderado de conductores por severidad.
 - Comparación con el período anterior.

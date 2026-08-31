@@ -9,6 +9,7 @@ from report_engine import (
     detailed_driver_ranking,
     operational_risk_summary,
     recurrence_summary,
+    sensor_alert_summary,
 )
 
 
@@ -47,6 +48,19 @@ class OperationalRiskTests(unittest.TestCase):
         self.assertEqual(len(ranges), 4)
         self.assertEqual(ranges[-1][1].date().weekday(), 0)
         self.assertEqual(ranges[-1][2].date().weekday(), 6)
+
+    def test_sensor_analysis_counts_affected_and_recurrent_tractos(self):
+        current = pd.DataFrame({
+            "Tipo": ["Sensor Tapado", "Sensor Tapado", "Sensor desalineado", "Sensor desalineado"],
+            "Tracto": ["T1", "T1", "T1", "T2"],
+        })
+        previous = pd.DataFrame({"Tipo": ["Sensor Tapado"], "Tracto": ["T1"]})
+        result = sensor_alert_summary(current, previous)
+        self.assertEqual(result["total"], 4)
+        self.assertEqual(result["affected"], 2)
+        self.assertEqual(result["recurrent"], 1)
+        self.assertEqual(result["both"], 1)
+        self.assertEqual(result["priority"], "ALTA")
 
 
 if __name__ == "__main__":
