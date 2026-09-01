@@ -22,7 +22,7 @@ Aplicación Streamlit para generar informes semanales desde un Excel con hojas `
 - Comparación mensual configurable hasta 12 meses según la información disponible.
 - Ranking configurable de conductores, con Top 10 predeterminado.
 - PDF por transportista con anexo completo de eventos.
-- Excel por transportista con hojas Resumen, Ranking conductores, Evolución y Detalle eventos.
+- PDF por transportista con resumen, evolución, ranking, análisis técnico y detalle de eventos.
 
 ## Ejecutar localmente
 

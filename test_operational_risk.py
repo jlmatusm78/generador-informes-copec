@@ -69,6 +69,7 @@ class OperationalRiskTests(unittest.TestCase):
         self.assertIn("Análisis técnico de alertas de sensores", source)
         self.assertIn("_sensor_summary_table", source)
         self.assertIn("_sensor_equipment_rows", source)
+        self.assertNotIn("_write_transportista_excel", source)
 
 
 if __name__ == "__main__":

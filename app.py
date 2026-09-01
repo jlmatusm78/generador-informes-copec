@@ -40,7 +40,7 @@ st.set_page_config(
 # Incrementar cuando cambia la estructura de los informes. Esto evita que una
 # sesión abierta en Streamlit siga ofreciendo PDFs/ZIP generados con código
 # anterior después de una actualización.
-REPORT_SCHEMA_VERSION = "2026.08.31-sensores-transportistas-v2"
+REPORT_SCHEMA_VERSION = "2026.09.01-solo-pdf-v1"
 
 if st.session_state.get("report_schema_version") != REPORT_SCHEMA_VERSION:
     for stale_key in (
@@ -158,7 +158,7 @@ with reports_tab:
     st.write(
         "Resumen ejecutivo, comparación histórica, riesgo operacional con cálculo explicado, reincidencia, ranking configurable, "
         "análisis técnico de Sensor tapado y Sensor desalineado, plan de acción y detalle completo de eventos. "
-        "Cada transportista recibe PDF y Excel con hojas de resumen, evolución, ranking y detalle."
+        "Cada transportista recibe un PDF completo con resumen, evolución, ranking y detalle."
     )
 
     if st.button("Generar informes", type="primary", use_container_width=True):

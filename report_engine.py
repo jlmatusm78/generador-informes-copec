@@ -253,17 +253,6 @@ def _detail_dataframe(current):
     return detail.fillna("")
 
 
-def _write_transportista_excel(path,current,drivers,ranges,metrics,risk,recurrence):
-    summary=pd.DataFrame([["Nivel de riesgo operacional",risk["level"]],["Puntos de riesgo",risk["points"]],["Explicación",risk["equation"]],["Regla aplicada",risk["rule"]],["Índice de reincidencia",f"{recurrence['rate']:.1f}%"],["Conductores reincidentes",recurrence["recurrent"]]],columns=["Indicador","Resultado"])
-    evolution=pd.DataFrame({"Período":[x[0] for x in ranges],**metrics})
-    with pd.ExcelWriter(path,engine="openpyxl") as writer:
-        summary.to_excel(writer,sheet_name="Resumen",index=False); drivers.to_excel(writer,sheet_name="Ranking conductores",index=False); evolution.to_excel(writer,sheet_name="Evolución",index=False); _detail_dataframe(current).to_excel(writer,sheet_name="Detalle eventos",index=False)
-        for sheet in writer.book.worksheets:
-            sheet.freeze_panes="A2"; sheet.auto_filter.ref=sheet.dimensions
-            for cell in sheet[1]: cell.font=cell.font.copy(bold=True)
-            for column in sheet.columns: sheet.column_dimensions[column[0].column_letter].width=min(max(len(str(cell.value or "")) for cell in column)+2,45)
-
-
 def _rank_transportistas(current,previous):
     rows=[]; previous_counts=previous.groupby("Transportista").size()
     for transportista,frame in current.groupby("Transportista"):
@@ -418,7 +407,7 @@ def generate_global_report(data,config,output_dir):
 
 
 def generate_transportista_report(data,transportista,config,output_dir,index):
-    styles=_styles(); all_t=data[data.Transportista==transportista].copy(); current=_period_slice(all_t,config.period_start,config.period_end); ranges=comparison_ranges(config); labels=[x[0] for x in ranges]; metrics=_historical_metrics(all_t,ranges); previous=all_t[(all_t.Fecha>=ranges[-2][1])&(all_t.Fecha<=ranges[-2][2])] if len(ranges)>1 else current.iloc[0:0]
+    styles=_styles(); all_t=data[data.Transportista==transportista].copy(); current=_period_slice(all_t,config.period_start,config.period_end); ranges=comparison_ranges(config); labels=[x[0] for x in ranges]; previous=all_t[(all_t.Fecha>=ranges[-2][1])&(all_t.Fecha<=ranges[-2][2])] if len(ranges)>1 else current.iloc[0:0]
     drivers=detailed_driver_ranking(current,previous,config.top_drivers,False); rec=recurrence_summary(current); risk=operational_risk_summary(current)
     chart=output_dir/f"charts_{index:02d}"; chart.mkdir(exist_ok=True); p1=chart/"alert_types.png"; p3=chart/"drivers.png"
     period_label="mensual" if config.report_mode.lower().startswith("mens") else "semanal"; _plot_alert_small_multiples(labels,_alert_history(all_t,ranges),p1,period_label); _plot_bar([wrap_label(x,26) for x in drivers.Conductor],drivers.Riesgo,"Conductores por riesgo operacional","Puntos",p3)
@@ -433,8 +422,7 @@ def generate_transportista_report(data,transportista,config,output_dir,index):
     for _,r in detail[detail_cols].iterrows(): drows.append([Paragraph(truncate(r[col],24),styles["TinyCustom"]) for col in detail_cols])
     widths=[1.4,1.7,1.8,4.0,1.5,1.7,3.0,2.0][:len(detail_cols)]; elements += [_style_table(LongTable(drows,colWidths=[x*cm for x in widths],repeatRows=1),4.7)]
     doc.build(elements,onFirstPage=_page_branding,onLaterPages=_page_branding)
-    excel=output_dir/f"{index:02d}_Detalle_{safe_filename(transportista)}_{config.period_start:%d%m}_{config.period_end:%d%m%Y}.xlsx"; _write_transportista_excel(excel,current,drivers,ranges,metrics,risk,rec)
-    return pdf,excel
+    return pdf
 
 
 def generate_reports(data,config):
@@ -444,7 +432,7 @@ def generate_reports(data,config):
         out=Path(tmp); global_bytes=None; files=[]; global_path=None
         if config.include_global: global_path=generate_global_report(data,config,out); global_bytes=global_path.read_bytes()
         transportistas=sorted(current.Transportista.dropna().unique()) if config.include_transportistas else []
-        for index,transportista in enumerate(transportistas,1): files.extend(generate_transportista_report(data,transportista,config,out,index))
+        for index,transportista in enumerate(transportistas,1): files.append(generate_transportista_report(data,transportista,config,out,index))
         buffer=io.BytesIO()
         with zipfile.ZipFile(buffer,"w",zipfile.ZIP_DEFLATED) as archive:
             if global_path: archive.write(global_path,arcname=global_path.name)
