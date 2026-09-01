@@ -19,8 +19,8 @@ from reportlab.platypus import Image, LongTable, PageBreak, Paragraph, SimpleDoc
 from alert_aliases import SENSOR_BLOCKED, SENSOR_MISALIGNED, normalize_alert_name
 
 RISK_WEIGHTS = {"Fatiga sin cumplimiento": 10, "Fatiga pendiente": 8, "Sin cinturón": 6, "Conductor fumando": 6, "Fatiga con cumplimiento": 3}
-GENERIC_TRANSPORTISTAS = ["COPEC", "NO ES COPEC", "PLANTA", "DESCONOCIDO", "OWL", "GPS", "PRUEBA", "SIN TRANSPORTISTA"]
-REPORT_ENGINE_VERSION = "2026.08.31.4"
+GENERIC_TRANSPORTISTAS = {"COPEC", "NO ES COPEC", "PLANTA", "DESCONOCIDO", "OWL", "GPS", "PRUEBA", "SIN TRANSPORTISTA"}
+REPORT_ENGINE_VERSION = "2026.09.01.1"
 REPORT_LOGO = Path(__file__).resolve().parent / "assets" / "logo_copec_90.png"
 
 
@@ -110,7 +110,10 @@ def load_data(uploaded_file):
 
 
 def filter_real_transportistas(data):
-    return data[data["Transportista"].map(lambda x: not any(g in norm_text(x) for g in GENERIC_TRANSPORTISTAS))].copy()
+    # Las categorías genéricas se excluyen sólo por coincidencia exacta. Una
+    # empresa real puede contener palabras como COPEC, GPS o PLANTA en su nombre.
+    normalized = data["Transportista"].map(norm_text)
+    return data[~normalized.isin(GENERIC_TRANSPORTISTAS)].copy()
 
 
 def detect_default_week(data):

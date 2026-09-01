@@ -12,6 +12,7 @@ from report_engine import (
     recurrence_summary,
     sensor_alert_summary,
     generate_transportista_report,
+    filter_real_transportistas,
 )
 
 
@@ -20,6 +21,21 @@ def frame(rows):
 
 
 class OperationalRiskTests(unittest.TestCase):
+    def test_transportista_filter_uses_exact_generic_names(self):
+        data = pd.DataFrame({"Transportista": [
+            "COPEC",
+            "GPS",
+            "TRANSPORTES COPEC SUR",
+            "LOGÍSTICA GPS CHILE",
+            "TRANSPORTES PLANTA NORTE",
+        ]})
+        result = filter_real_transportistas(data)
+        self.assertEqual(result["Transportista"].tolist(), [
+            "TRANSPORTES COPEC SUR",
+            "LOGÍSTICA GPS CHILE",
+            "TRANSPORTES PLANTA NORTE",
+        ])
+
     def test_weights_and_explanation(self):
         data = frame([
             ("Ana", "Fatiga", "NO", 1),

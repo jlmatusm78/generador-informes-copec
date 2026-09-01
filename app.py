@@ -20,6 +20,7 @@ try:
         ReportConfig,
         detect_default_month,
         detect_default_week,
+        filter_real_transportistas,
         generate_reports,
         load_data,
     )
@@ -40,7 +41,7 @@ st.set_page_config(
 # Incrementar cuando cambia la estructura de los informes. Esto evita que una
 # sesión abierta en Streamlit siga ofreciendo PDFs/ZIP generados con código
 # anterior después de una actualización.
-REPORT_SCHEMA_VERSION = "2026.09.01-solo-pdf-v1"
+REPORT_SCHEMA_VERSION = "2026.09.01-filtro-transportistas-v1"
 
 if st.session_state.get("report_schema_version") != REPORT_SCHEMA_VERSION:
     for stale_key in (
@@ -143,7 +144,8 @@ if period_end < period_start:
     st.error("La fecha final no puede ser anterior a la fecha inicial.")
     st.stop()
 
-current = data[(data["Fecha"].dt.date >= period_start) & (data["Fecha"].dt.date <= period_end)]
+report_data = filter_real_transportistas(data)
+current = report_data[(report_data["Fecha"].dt.date >= period_start) & (report_data["Fecha"].dt.date <= period_end)]
 m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("Alertas", f"{len(current):,}")
 m2.metric("Transportistas", current["Transportista"].nunique())
