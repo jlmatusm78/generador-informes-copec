@@ -16,12 +16,14 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.platypus import Image, LongTable, PageBreak, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from rco_sections import identified_data, driver_count, driver_keys, rco_summary, fmt_pct, executive_pages, rco_appendix, body
+
 from alert_aliases import SENSOR_BLOCKED, SENSOR_MISALIGNED, normalize_alert_name
 
 RISK_WEIGHTS = {"Fatiga sin cumplimiento": 10, "Fatiga pendiente": 8, "Sin cinturón": 6, "Conductor fumando": 6, "Fatiga con cumplimiento": 3}
 GENERIC_TRANSPORTISTAS = {"COPEC", "NO ES COPEC", "PLANTA", "DESCONOCIDO", "OWL", "GPS", "PRUEBA", "SIN TRANSPORTISTA"}
-REPORT_ENGINE_VERSION = "2026.09.01.1"
-REPORT_LOGO = Path(__file__).resolve().parent / "assets" / "logo_copec_90.png"
+REPORT_ENGINE_VERSION = "2026.09.14-rco-1"
+REPORT_LOGO = Path(__file__).resolve().parent / "copec.png"
 
 
 @dataclass
@@ -159,8 +161,9 @@ def compliance_summary(df):
 
 
 def recurrence_summary(df):
-    counts = df.groupby("Conductor").size() if not df.empty else pd.Series(dtype=int); total = len(counts); recurrent = int((counts>=2).sum())
-    return {"one":int((counts==1).sum()),"two":int((counts==2).sum()),"three_plus":int((counts>=3).sum()),"recurrent":recurrent,"total":total,"rate":recurrent/total*100 if total else 0.0}
+    df = identified_data(df)
+    counts = df.groupby(driver_keys(df)).size() if not df.empty else pd.Series(dtype=int); total = len(counts); recurrent = int((counts>=2).sum())
+    return {"one":int((counts==1).sum()),"two":int((counts==2).sum()),"three_plus":int((counts>=3).sum()),"recurrent":recurrent,"total":total,"rate":recurrent/total*100 if total else float("nan")}
 
 
 def operational_risk_summary(df):
@@ -168,7 +171,7 @@ def operational_risk_summary(df):
     no = int((fatigue["CumplimientoFatiga"]=="NO").sum()); pending = int((fatigue["CumplimientoFatiga"]=="PENDIENTE").sum()); yes = int((fatigue["CumplimientoFatiga"]=="SI").sum())
     belt = int((df["Tipo"]=="Sin cinturón").sum()); smoking = int((df["Tipo"]=="Conductor fumando").sum())
     points = no*10+pending*8+belt*6+smoking*6+yes*3
-    repeated = int((fatigue[fatigue["CumplimientoFatiga"]=="NO"].groupby("Conductor").size()>=2).sum())
+    repeated = int((identified_data(fatigue[fatigue["CumplimientoFatiga"]=="NO"]).groupby(driver_keys(df)).size()>=2).sum())
     if points >= 50 or repeated: level, rule = "CRÍTICO", ("50 puntos o más" if points>=50 else "reincidencia de fatiga sin cumplimiento")
     elif points >= 25: level, rule = "ALTO", "entre 25 y 49 puntos"
     elif points >= 10: level, rule = "MEDIO", "entre 10 y 24 puntos"
@@ -178,12 +181,13 @@ def operational_risk_summary(df):
 
 
 def detailed_driver_ranking(current, previous, topn=10, include_transportista=False):
+    current = identified_data(current); previous = identified_data(previous)
     group = ["Conductor","Transportista"] if include_transportista else ["Conductor"]; rows=[]
-    if current.empty: return pd.DataFrame()
-    previous_counts = previous.groupby("Conductor").size()
+    if current.empty: return pd.DataFrame(columns=group+["Alertas","Reincidencias","Fatiga sin cumplir","Fatiga pendiente","Sin cinturón","Fumando","Riesgo","Nivel","Anterior","Variación"])
+    previous_counts = previous.groupby(group).size()
     for keys, frame in current.groupby(group, dropna=False):
         keys = keys if isinstance(keys,tuple) else (keys,); risk=operational_risk_summary(frame); alerts=len(frame)
-        row={group[i]:keys[i] for i in range(len(group))}; row.update({"Alertas":alerts,"Reincidencias":max(alerts-1,0),"Fatiga sin cumplir":risk["fatigue_no"],"Fatiga pendiente":risk["fatigue_pending"],"Sin cinturón":risk["seatbelt"],"Fumando":risk["smoking"],"Riesgo":risk["points"],"Nivel":risk["level"],"Anterior":int(previous_counts.get(keys[0],0))})
+        row={group[i]:keys[i] for i in range(len(group))}; row.update({"Alertas":alerts,"Reincidencias":max(alerts-1,0),"Fatiga sin cumplir":risk["fatigue_no"],"Fatiga pendiente":risk["fatigue_pending"],"Sin cinturón":risk["seatbelt"],"Fumando":risk["smoking"],"Riesgo":risk["points"],"Nivel":risk["level"],"Anterior":int(previous_counts.get(keys if include_transportista else keys[0],0))})
         row["Variación"] = pct_change(alerts,row["Anterior"]); rows.append(row)
     ranking=pd.DataFrame(rows); ranking["Prioritarios"]=ranking["Sin cinturón"]+ranking["Fumando"]
     return ranking.sort_values(["Fatiga sin cumplir","Reincidencias","Prioritarios","Alertas"],ascending=False).head(max(int(topn),1)).drop(columns=["Prioritarios"])
@@ -202,16 +206,14 @@ def _page_branding(canvas, doc):
     page_width, page_height = doc.pagesize
     if REPORT_LOGO.exists():
         logo_width = 4.8 * cm
-        logo_height = logo_width * 655 / 2286
-        canvas.drawImage(
-            str(REPORT_LOGO),
-            1.05 * cm,
-            page_height - 0.65 * cm - logo_height,
-            width=logo_width,
-            height=logo_height,
-            preserveAspectRatio=True,
-            mask="auto",
-        )
+        scale = logo_width / 679
+        x = 1.05 * cm; y = page_height - 0.65 * cm - 143 * scale
+        canvas.saveState()
+        clip = canvas.beginPath(); clip.rect(x, y, logo_width, 143 * scale)
+        canvas.clipPath(clip, stroke=0)
+        canvas.drawImage(str(REPORT_LOGO), x-94*scale, y-253*scale,
+                         width=866*scale, height=650*scale)
+        canvas.restoreState()
     canvas.setStrokeColor(colors.HexColor("#E31B16"))
     canvas.setLineWidth(0.6)
     canvas.line(1.05 * cm, page_height - 2.05 * cm, page_width - 1.05 * cm, page_height - 2.05 * cm)
@@ -245,7 +247,7 @@ def _historical_metrics(data,ranges):
 def _methodology_flowables(styles,risk,recurrence):
     rows=[["Factor","Cantidad","Peso","Subtotal"],["Fatiga sin cumplimiento",risk["fatigue_no"],10,risk["fatigue_no"]*10],["Fatiga pendiente",risk["fatigue_pending"],8,risk["fatigue_pending"]*8],["Sin cinturón",risk["seatbelt"],6,risk["seatbelt"]*6],["Conductor fumando",risk["smoking"],6,risk["smoking"]*6],["Fatiga con cumplimiento",risk["fatigue_yes"],3,risk["fatigue_yes"]*3],["TOTAL","","",risk["points"]]]
     explanation=f"<b>Nivel {risk['level']}</b>: {risk['equation']} Regla aplicada: “{risk['rule']}”. Escala: Bajo &lt;10; Medio 10–24; Alto 25–49; Crítico ≥50 o reincidencia de fatiga sin cumplimiento. Cada fatiga sin cumplimiento es individualmente prioridad crítica."
-    rec_text=f"Índice de reincidencia: {recurrence['recurrent']} conductores con 2 o más eventos ÷ {recurrence['total']} conductores con eventos = {recurrence['rate']:.1f}%. Se presenta separado del riesgo operacional."
+    rec_text=f"Índice de reincidencia: {recurrence['recurrent']} conductores con 2 o más eventos ÷ {recurrence['total']} conductores con eventos = {fmt_pct(recurrence['rate'])}. Se presenta separado del riesgo operacional."
     return [Paragraph("Metodología del riesgo operacional",styles["H2Custom"]),_style_table(Table(rows,colWidths=[7*cm,2.2*cm,2*cm,2.4*cm]),6.2),Spacer(1,5),Paragraph(explanation,styles["BodyCustom"]),Spacer(1,4),Paragraph(rec_text,styles["BodyCustom"])]
 
 
@@ -259,7 +261,7 @@ def _detail_dataframe(current):
 def _rank_transportistas(current,previous):
     rows=[]; previous_counts=previous.groupby("Transportista").size()
     for transportista,frame in current.groupby("Transportista"):
-        risk=operational_risk_summary(frame); rec=recurrence_summary(frame); rows.append({"Transportista":transportista,"Alertas":len(frame),"Anterior":int(previous_counts.get(transportista,0)),"Conductores":frame["Conductor"].nunique(),"Reincidencia":rec["rate"],"Fatiga sin cumplir":risk["fatigue_no"],"Sin cinturón":risk["seatbelt"],"Fumando":risk["smoking"],"Riesgo":risk["points"],"Nivel":risk["level"]})
+        risk=operational_risk_summary(frame); rec=recurrence_summary(frame); rows.append({"Transportista":transportista,"Alertas":len(frame),"Anterior":int(previous_counts.get(transportista,0)),"Conductores":driver_count(frame),"Reincidencia":rec["rate"],"Fatiga sin cumplir":risk["fatigue_no"],"Sin cinturón":risk["seatbelt"],"Fumando":risk["smoking"],"Riesgo":risk["points"],"Nivel":risk["level"]})
     rank=pd.DataFrame(rows)
     return rank.sort_values(["Fatiga sin cumplir","Riesgo","Reincidencia","Alertas"],ascending=False) if not rank.empty else rank
 
@@ -318,7 +320,7 @@ def _executive_findings(current, previous, risk, recurrence, subject="COPEC"):
         delta,name,value,old=max(candidates)
         findings.append(f"La mayor presión proviene de {name}: {value} eventos, {delta:+d} respecto del período anterior.")
     findings.append(f"Existen {risk['fatigue_no']} fatigas sin cumplimiento; {risk['repeated_fatigue_no_drivers']} conductores repiten este incumplimiento.")
-    findings.append(f"La reincidencia alcanza {recurrence['rate']:.1f}%: {recurrence['recurrent']} de {recurrence['total']} conductores registran dos o más eventos.")
+    findings.append(f"La reincidencia alcanza {fmt_pct(recurrence['rate'])}: {recurrence['recurrent']} de {recurrence['total']} conductores registran dos o más eventos.")
     return findings
 
 
@@ -331,7 +333,7 @@ def _action_rows(risk, rec, owner="Operaciones / Transportista"):
     return [["Prioridad","Hallazgo","Acción recomendada","Responsable","Plazo"],
         ["INMEDIATA",f"{risk['fatigue_no']} fatigas sin cumplimiento","Revisar descanso, contacto y trazabilidad; documentar cierre.",owner,"24 h"],
         ["ALTA",f"{risk['seatbelt']} eventos sin cinturón","Intervenir reincidentes y verificar resultado en el siguiente período.","Prevención","7 días"],
-        ["ALTA",f"Reincidencia {rec['rate']:.1f}%","Asignar seguimiento individual a conductores con dos o más eventos.","Jefatura operativa","7 días"],
+        ["ALTA",f"Reincidencia {fmt_pct(rec['rate'])}","Asignar seguimiento individual a conductores con dos o más eventos.","Jefatura operativa","7 días"],
         ["TÉCNICA",f"{risk['fatigue_pending']} fatigas pendientes","Completar clasificación y cerrar gestiones pendientes.","Torre de Control","48 h"]]
 
 
@@ -394,18 +396,19 @@ def generate_global_report(data,config,output_dir):
     chart=output_dir/"charts_global"; chart.mkdir(exist_ok=True); alert_chart=chart/"alert_types.png"; trans_chart=chart/"transportistas.png"; driver_chart=chart/"drivers.png"
     period_label="mensual" if config.report_mode.lower().startswith("mens") else "semanal"; _plot_alert_small_multiples(labels,_alert_history(data,ranges),alert_chart,period_label); _plot_bar([wrap_label(x,24) for x in rank_t.head(10).Transportista],rank_t.head(10).Riesgo,"Transportistas por riesgo operacional","Puntos",trans_chart); _plot_bar([wrap_label(x,27) for x in drivers.head(10).Conductor],drivers.head(10).Riesgo,"Conductores por riesgo operacional","Puntos",driver_chart)
     pdf=output_dir/f"00_Informe_Global_COPEC_{config.report_mode}_{config.period_start:%d%m}_{config.period_end:%d%m%Y}.pdf"; doc=SimpleDocTemplate(str(pdf),pagesize=A4,rightMargin=1.05*cm,leftMargin=1.05*cm,topMargin=2.25*cm,bottomMargin=1.2*cm)
-    kpi=[["Indicador","Resultado"],["Eventos",len(current)],["Variación",pct_change(len(current),len(previous))],["Transportistas",current.Transportista.nunique()],["Conductores",current.Conductor.nunique()],["Fatiga sin cumplimiento",risk["fatigue_no"]],["Reincidencia",f"{rec['rate']:.1f}%"],["Riesgo operacional",f"{risk['level']} ({risk['points']} pts)"]]
+    kpi=[["Indicador","Resultado"],["Eventos",len(current)],["Variación",pct_change(len(current),len(previous))],["Transportistas",current.Transportista.nunique()],["Conductores identificados",driver_count(current)],["Fatiga sin cumplimiento",risk["fatigue_no"]],["Reincidencia",f"{fmt_pct(rec['rate'])}"],["Riesgo operacional",f"{risk['level']} ({risk['points']} pts)"]]
     findings=_executive_findings(current,previous,risk,rec); trend=_trend_rows(current,previous); sensor_summary=sensor_alert_summary(current,previous); sensor_rank=_sensor_transportista_rows(current,previous)
     elements=[Paragraph(f"INFORME {config.report_mode.upper()} GLOBAL COPEC",styles["TitleCustom"]),Paragraph(f"Período: {config.period_start:%d-%m-%Y} al {config.period_end:%d-%m-%Y} · Comparación: {config.comparison_periods} períodos",styles["BodyCustom"]),Spacer(1,5),Paragraph("1. Resumen ejecutivo y decisiones",styles["H2Custom"]),Table([[_style_table(Table(kpi,colWidths=[4.6*cm,2.8*cm]),6.1),_findings_box(styles,findings)]],colWidths=[7.5*cm,9.7*cm],style=[("VALIGN",(0,0),(-1,-1),"TOP")]),Spacer(1,5),Image(str(alert_chart),width=17.6*cm,height=8.0*cm),PageBreak(),Paragraph("2. Evolución y composición de las alertas",styles["H2Custom"]),_style_table(Table(trend[:13],colWidths=[5.2*cm,2*cm,2*cm,2.2*cm,2.2*cm,2.3*cm]),5.8),Spacer(1,8)]+_methodology_flowables(styles,risk,rec)+[PageBreak(),Paragraph("3. Análisis técnico de alertas de sensores",styles["H2Custom"]),_sensor_cards(styles,sensor_summary),Spacer(1,7),_sensor_summary_table(styles,sensor_summary),Spacer(1,10),Paragraph("Transportistas con mayor incidencia técnica",styles["H2Custom"]),_style_table(Table([[Paragraph(truncate(c,30),styles["SmallCustom"]) if i==0 and r>0 else c for i,c in enumerate(row)] for r,row in enumerate(sensor_rank)],colWidths=[5.1*cm,1.3*cm,1.8*cm,1.3*cm,1.4*cm,1.7*cm,1.7*cm,1.8*cm]),5.0),Spacer(1,7),Paragraph("Prioridad alta: aumento superior al 20%, cinco o más tractos reincidentes o ambos tipos de alerta en el mismo equipo.",styles["BodyCustom"]),PageBreak(),Paragraph("4. Transportistas prioritarios",styles["H2Custom"]),Image(str(trans_chart),width=17.5*cm,height=6.8*cm),Spacer(1,4)]
     rows=[["Transportista","Eventos","Fatiga NO","Cint.","Fuma","Reinc. %","Riesgo","Motivo"]]
     for _,r in rank_t.head(15).iterrows():
         reason="Fatiga" if r["Fatiga sin cumplir"] else "Reincidencia" if r.Reincidencia>=50 else "Cinturón" if r["Sin cinturón"] else "Volumen"
-        rows.append([Paragraph(truncate(r.Transportista,30),styles["SmallCustom"]),int(r.Alertas),int(r["Fatiga sin cumplir"]),int(r["Sin cinturón"]),int(r.Fumando),f"{r.Reincidencia:.1f}%",int(r.Riesgo),reason])
+        rows.append([Paragraph(truncate(r.Transportista,30),styles["SmallCustom"]),int(r.Alertas),int(r["Fatiga sin cumplir"]),int(r["Sin cinturón"]),int(r.Fumando),f"{fmt_pct(r.Reincidencia)}",int(r.Riesgo),reason])
     elements += [_style_table(Table(rows,colWidths=[5.1*cm,1.3*cm,1.5*cm,1.2*cm,1.1*cm,1.5*cm,1.3*cm,2*cm]),5.1),PageBreak(),Paragraph("5. Conductores y concentración del riesgo",styles["H2Custom"]),Image(str(driver_chart),width=17.5*cm,height=6.5*cm),Spacer(1,4)]
     drows=[["Conductor","Empresa","Eventos","Reinc.","Fatiga NO","Cint.","Fuma","Riesgo","Nivel"]]
     for _,r in drivers.head(config.top_drivers).iterrows(): drows.append([Paragraph(truncate(r.Conductor,25),styles["SmallCustom"]),Paragraph(truncate(r.Transportista,20),styles["SmallCustom"]),int(r.Alertas),int(r.Reincidencias),int(r["Fatiga sin cumplir"]),int(r["Sin cinturón"]),int(r.Fumando),int(r.Riesgo),r.Nivel])
     top_risk=drivers.head(10).Riesgo.sum() if not drivers.empty else 0; concentration=top_risk/risk["points"]*100 if risk["points"] else 0
     elements += [_style_table(Table(drows,colWidths=[3.8*cm,3.1*cm,1.1*cm,1.1*cm,1.2*cm,1*cm,1*cm,1.1*cm,1.4*cm]),4.9),Spacer(1,6),Paragraph(f"Los 10 conductores principales concentran {concentration:.1f}% de los puntos de riesgo del período.",styles["BodyCustom"]),PageBreak(),Paragraph("6. Plan de acción y seguimiento",styles["H2Custom"]),_style_table(Table([[Paragraph(str(c),styles["SmallCustom"]) for c in row] for row in _action_rows(risk,rec)],colWidths=[1.8*cm,4.4*cm,6.4*cm,3.1*cm,1.3*cm]),5.5),Spacer(1,8),Paragraph("Criterio de seguimiento",styles["H2Custom"]),Paragraph("En el próximo informe se debe verificar si disminuyeron las alertas intervenidas, si los conductores reincidentes repiten eventos y si las fatigas pendientes fueron cerradas. Las acciones sin mejora deben escalarse al responsable operacional.",styles["BodyCustom"])]
+    elements = executive_pages(current, previous, config, risk=risk) + elements + rco_appendix(current, previous, global_report=True)
     doc.build(elements,onFirstPage=_page_branding,onLaterPages=_page_branding); return pdf
 
 
@@ -415,7 +418,7 @@ def generate_transportista_report(data,transportista,config,output_dir,index):
     chart=output_dir/f"charts_{index:02d}"; chart.mkdir(exist_ok=True); p1=chart/"alert_types.png"; p3=chart/"drivers.png"
     period_label="mensual" if config.report_mode.lower().startswith("mens") else "semanal"; _plot_alert_small_multiples(labels,_alert_history(all_t,ranges),p1,period_label); _plot_bar([wrap_label(x,26) for x in drivers.Conductor],drivers.Riesgo,"Conductores por riesgo operacional","Puntos",p3)
     pdf=output_dir/f"{index:02d}_Informe_{config.report_mode}_{safe_filename(transportista)}_{config.period_start:%d%m}_{config.period_end:%d%m%Y}.pdf"; doc=SimpleDocTemplate(str(pdf),pagesize=A4,rightMargin=1*cm,leftMargin=1*cm,topMargin=2.25*cm,bottomMargin=1.2*cm)
-    kpi=[["Indicador","Resultado"],["Eventos",len(current)],["Período anterior",len(previous)],["Variación",pct_change(len(current),len(previous))],["Conductores",current.Conductor.nunique()],["Equipos",current.Tracto.nunique()],["Fatiga sin cumplimiento",risk["fatigue_no"]],["Sin cinturón",risk["seatbelt"]],["Conductor fumando",risk["smoking"]],["Reincidencia",f"{rec['rate']:.1f}%"],["Riesgo operacional",f"{risk['level']} ({risk['points']} pts)"]]
+    kpi=[["Indicador","Resultado"],["Eventos",len(current)],["Período anterior",len(previous)],["Variación",pct_change(len(current),len(previous))],["Conductores identificados",driver_count(current)],["Equipos",current.Tracto.nunique()],["Fatiga sin cumplimiento",risk["fatigue_no"]],["Sin cinturón",risk["seatbelt"]],["Conductor fumando",risk["smoking"]],["Reincidencia",f"{fmt_pct(rec['rate'])}"],["Riesgo operacional",f"{risk['level']} ({risk['points']} pts)"]]
     findings=_executive_findings(current,previous,risk,rec,transportista); trend=_trend_rows(current,previous); sensor_summary=sensor_alert_summary(current,previous); equipment_rows=_sensor_equipment_rows(current)
     elements=[Paragraph(f"INFORME {config.report_mode.upper()} DE ALERTAS",styles["TitleCustom"]),Paragraph(f"Transportista: {transportista}<br/>Período: {config.period_start:%d-%m-%Y} al {config.period_end:%d-%m-%Y} · Comparación: {config.comparison_periods} períodos",styles["BodyCustom"]),Spacer(1,5),Paragraph("1. Resumen ejecutivo y decisiones",styles["H2Custom"]),Table([[_style_table(Table(kpi,colWidths=[4.7*cm,2.7*cm]),6.0),_findings_box(styles,findings)]],colWidths=[7.6*cm,9.6*cm],style=[("VALIGN",(0,0),(-1,-1),"TOP")]),Spacer(1,4),Image(str(p1),width=17.6*cm,height=8.0*cm),PageBreak(),Paragraph("2. Evolución, alertas y metodología",styles["H2Custom"]),_style_table(Table(trend[:12],colWidths=[5.2*cm,2*cm,2*cm,2.2*cm,2.2*cm,2.3*cm]),5.7),Spacer(1,8)]+_methodology_flowables(styles,risk,rec)+[PageBreak(),Paragraph("3. Análisis técnico de alertas de sensores",styles["H2Custom"]),_sensor_cards(styles,sensor_summary),Spacer(1,7),_sensor_summary_table(styles,sensor_summary),Spacer(1,10),Paragraph("Tractos con eventos de sensores",styles["H2Custom"]),_style_table(Table(equipment_rows,colWidths=[2.6*cm,2.3*cm,1.7*cm,2.3*cm,1.5*cm,2.5*cm,2.2*cm]),5.4),Spacer(1,7),Paragraph("Prioridad alta cuando un tracto registra tres o más eventos o presenta Sensor Tapado y Sensor desalineado en el mismo período.",styles["BodyCustom"]),PageBreak(),Paragraph("4. Conductores prioritarios",styles["H2Custom"]),Image(str(p3),width=17.6*cm,height=6.3*cm),Spacer(1,4)]
     rows=[["Conductor","Eventos","Reinc.","Fatiga NO","Pend.","Cint.","Fuma","Riesgo","Nivel"]]
@@ -424,6 +427,7 @@ def generate_transportista_report(data,transportista,config,output_dir,index):
     detail=_detail_dataframe(current); detail_cols=[c for c in ["ID","Fecha","Plataforma","Conductor","Tracto","Patente","Tipo de evento","Cumplimiento fatiga"] if c in detail.columns]; drows=[detail_cols]
     for _,r in detail[detail_cols].iterrows(): drows.append([Paragraph(truncate(r[col],24),styles["TinyCustom"]) for col in detail_cols])
     widths=[1.4,1.7,1.8,4.0,1.5,1.7,3.0,2.0][:len(detail_cols)]; elements += [_style_table(LongTable(drows,colWidths=[x*cm for x in widths],repeatRows=1),4.7)]
+    elements = executive_pages(current, previous, config, transportista, risk=risk) + elements + rco_appendix(current, previous)
     doc.build(elements,onFirstPage=_page_branding,onLaterPages=_page_branding)
     return pdf
 
@@ -442,4 +446,4 @@ def generate_reports(data,config):
             for path in files: archive.write(path,arcname=path.name)
         zip_bytes=buffer.getvalue()
     risk=operational_risk_summary(current); rec=recurrence_summary(current)
-    return global_bytes,zip_bytes,{"total_alertas":len(current),"transportistas":len(transportistas),"conductores":current.Conductor.nunique(),"equipos":current.Tracto.nunique(),"fatiga":int((current.Tipo=="Fatiga").sum()),"riesgo":risk["level"],"reincidencia":rec["rate"],"modo":config.report_mode}
+    return global_bytes,zip_bytes,{"total_alertas":len(current),"transportistas":len(transportistas),"conductores":driver_count(current),"equipos":current.Tracto.nunique(),"fatiga":int((current.Tipo=="Fatiga").sum()),"riesgo":risk["level"],"reincidencia":rec["rate"],"modo":config.report_mode,"sin_rco":rco_summary(current)["sin_rco"],"pct_sin_rco":rco_summary(current)["pct"]}

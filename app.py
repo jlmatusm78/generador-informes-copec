@@ -4,6 +4,8 @@ from datetime import datetime
 import io
 import zipfile
 
+from rco_sections import driver_count, rco_summary, fmt_pct
+
 import pandas as pd
 import streamlit as st
 
@@ -41,7 +43,7 @@ st.set_page_config(
 # Incrementar cuando cambia la estructura de los informes. Esto evita que una
 # sesión abierta en Streamlit siga ofreciendo PDFs/ZIP generados con código
 # anterior después de una actualización.
-REPORT_SCHEMA_VERSION = "2026.09.01-filtro-transportistas-v1"
+REPORT_SCHEMA_VERSION = "2026.09.14-sin-rco-v1"
 
 if st.session_state.get("report_schema_version") != REPORT_SCHEMA_VERSION:
     for stale_key in (
@@ -149,9 +151,15 @@ current = report_data[(report_data["Fecha"].dt.date >= period_start) & (report_d
 m1, m2, m3, m4, m5 = st.columns(5)
 m1.metric("Alertas", f"{len(current):,}")
 m2.metric("Transportistas", current["Transportista"].nunique())
-m3.metric("Conductores", current["Conductor"].nunique())
+m3.metric("Conductores identificados", driver_count(current))
 m4.metric("Equipos", current["Tracto"].nunique())
 m5.metric("Fatiga", int((current["Tipo"] == "Fatiga").sum()))
+
+identification = rco_summary(current)
+st.info(f"Sin RCO: {identification['sin_rco']} alertas ({fmt_pct(identification['pct'])}). "
+        f"El análisis por conductor utiliza {identification['identified']} alertas identificadas.")
+if identification['other']:
+    st.warning(f"Otros registros sin identificación: {identification['other']}. Se muestran separados de Sin RCO.")
 
 reports_tab, email_tab = st.tabs(["📄 Generación de informes", "✉️ Envío por correo"])
 
@@ -193,9 +201,9 @@ with reports_tab:
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Alertas", summary["total_alertas"])
         c2.metric("Transportistas", summary["transportistas"])
-        c3.metric("Conductores", summary["conductores"])
+        c3.metric("Conductores identificados", summary["conductores"])
         c4.metric("Equipos", summary["equipos"])
-        c5.metric("Riesgo / reincidencia", f"{summary['riesgo']} · {summary['reincidencia']:.1f}%")
+        c5.metric("Riesgo / reincidencia", f"{summary['riesgo']} · {fmt_pct(summary['reincidencia'])}")
 
         if st.session_state.global_pdf:
             st.download_button(
